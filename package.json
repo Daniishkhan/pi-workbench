@@ -1,0 +1,95 @@
+{
+  "name": "@danish/pi-workbench",
+  "version": "0.1.0",
+  "description": "A unified, modular Pi orchestration system for one-off delegation, Shipyard workflows, agent teams, and bounded dynamic workflows.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "agents/",
+    "chains/",
+    "examples/",
+    "extensions/",
+    "profiles/",
+    "prompts/",
+    "skills/",
+    "scripts/",
+    "config.example.json",
+    "AGENTS.md",
+    "README.md",
+    "THIRD_PARTY.md"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "subagents",
+    "orchestration",
+    "shipyard",
+    "agent-teams",
+    "dynamic-workflows"
+  ],
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "verify:runtime": "node scripts/verify-runtime.mjs",
+    "test:core": "node --experimental-strip-types --test test/core/*.test.ts",
+    "test:shipyard": "node --experimental-strip-types --test test/shipyard/*.test.ts",
+    "test:teams": "node --experimental-strip-types --test test/teams/*.test.ts",
+    "test:dynamic": "node --experimental-strip-types --test test/dynamic/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run validate && npm run verify:runtime && npm run typecheck",
+    "test": "npm run check && npm run test:core && npm run test:shipyard && npm run test:teams && npm run test:dynamic"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills/pi-workbench",
+      "./skills/agent-teams",
+      "./skills/shipyard-bug-hunting",
+      "./skills/shipyard-delivery",
+      "./skills/shipyard-review-findings",
+      "./skills/shipyard-security-review",
+      "./skills/shipyard-ui-review",
+      "./skills/shipyard-validation",
+      "./skills/shipyard-workflows"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "subagents": {
+      "agents": [
+        "./agents"
+      ],
+      "chains": [
+        "./chains"
+      ]
+    }
+  },
+  "dependencies": {
+    "acorn": "8.17.0",
+    "pi-subagents": "https://codeload.github.com/nicobailon/pi-subagents/tar.gz/105c1399d36517292cc7dbe1f56f4724de39bd10"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.74.2",
+    "@earendil-works/pi-coding-agent": "0.82.0",
+    "@earendil-works/pi-tui": "0.74.0",
+    "@types/node": "^24.10.0",
+    "typebox": "1.1.38",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": { "optional": true },
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true },
+    "typebox": { "optional": true }
+  }
+}

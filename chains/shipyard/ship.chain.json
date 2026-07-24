@@ -1,0 +1,267 @@
+{
+  "name": "ship",
+  "package": "pi-shipyard",
+  "description": "Review and fix an existing worktree diff, revalidate changed behavior, and prepare a shipping-readiness handoff without commit or push.",
+  "chain": [
+    {
+      "agent": "pi-shipyard.codebase-reader",
+      "phase": "Scope",
+      "label": "Map existing change",
+      "as": "scope",
+      "task": "Build a compact shipping review brief for the existing worktree changes.\n\nShipping scope: {task}\n\nRead repository instructions, git status/diff, relevant source/callers/tests/config/docs, and any referenced task/plan. Define intended behavior, non-goals, changed paths, risks, release requirements, and validation harness. Do not edit project/source files.",
+      "output": "scope/shipping-brief.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 18,
+        "hard": 30,
+        "block": "*"
+      }
+    },
+    {
+      "phase": "Independent review",
+      "parallel": [
+        {
+          "agent": "pi-shipyard.contract-reviewer",
+          "label": "Contract review",
+          "as": "contracts",
+          "task": "Review existing changes for contract/invariant defects.\nScope: {outputs.scope}\nShipping scope: {task}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the scope artifact and inspect the actual diff/source/tests. Record concrete findings using stage `wave-1-contracts` and sourceRole `pi-shipyard.contract-reviewer`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-contracts.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.runtime-reviewer",
+          "label": "Runtime review",
+          "as": "runtime",
+          "task": "Trace existing changes for runtime/state/error/cleanup/retry/concurrency defects.\nScope: {outputs.scope}\nShipping scope: {task}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the scope artifact and inspect the actual diff/source/tests. Record concrete findings using stage `wave-1-runtime` and sourceRole `pi-shipyard.runtime-reviewer`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-runtime.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.adversarial-tester",
+          "label": "Adversarial review",
+          "as": "adversarial",
+          "task": "Construct focused counterexamples against existing changes.\nScope: {outputs.scope}\nShipping scope: {task}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the scope artifact, inspect diff/source/tests, and run safe targeted checks. Record concrete findings using stage `wave-1-adversarial` and sourceRole `pi-shipyard.adversarial-tester`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-adversarial.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.integration-reviewer",
+          "label": "Integration review",
+          "as": "integration",
+          "task": "Review callers, compatibility, config, persistence, migrations, packaging, and operational seams of existing changes.\nScope: {outputs.scope}\nShipping scope: {task}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the scope artifact and inspect adjacent unchanged code. Record concrete findings using stage `wave-1-integration` and sourceRole `pi-shipyard.integration-reviewer`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-integration.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        }
+      ],
+      "concurrency": 4,
+      "failFast": false
+    },
+    {
+      "agent": "pi-shipyard.falsifier",
+      "phase": "Cross-examination",
+      "label": "Falsify findings",
+      "as": "falsification",
+      "task": "Falsify the independent findings for: {task}\nScope: {outputs.scope}\nReceipts: {outputs.contracts} {outputs.runtime} {outputs.adversarial} {outputs.integration}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen all references. Snapshot with stage label `wave-1`, then verify/reject/narrow every proposed finding using expected revisions. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "review/wave-2-falsification.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 24,
+        "hard": 40,
+        "block": "*"
+      }
+    },
+    {
+      "agent": "pi-shipyard.blindspot-hunter",
+      "phase": "Cross-examination",
+      "label": "Hunt blind spots",
+      "as": "blindspots",
+      "task": "Audit uncovered risks and sibling bug classes for: {task}\nScope: {outputs.scope}\nWave-1 receipts: {outputs.contracts} {outputs.runtime} {outputs.adversarial} {outputs.integration}\nFalsification: {outputs.falsification}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen all references. Snapshot with stage label `post-falsification`; add only distinct findings using stage `wave-2-blindspots` and sourceRole `pi-shipyard.blindspot-hunter`. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "review/wave-2-blindspots.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 20,
+        "hard": 34,
+        "block": "*"
+      }
+    },
+    {
+      "agent": "pi-shipyard.review-synthesizer",
+      "phase": "Review decision",
+      "label": "Synthesize fixes",
+      "as": "preFixReview",
+      "task": "Adjudicate the review for: {task}\nScope: {outputs.scope}\nWave 1: {outputs.contracts} {outputs.runtime} {outputs.adversarial} {outputs.integration}\nWave 2: {outputs.falsification} {outputs.blindspots}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen all references and ledger records. Snapshot with stage label `pre-fix`. Produce a compact verified fix set, unresolved decisions, rejected/deferred findings, and post-fix validation contract. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "review/pre-fix-verdict.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 24,
+        "hard": 40,
+        "block": "*"
+      }
+    },
+    {
+      "agent": "pi-shipyard.implementation-worker",
+      "phase": "Fix",
+      "label": "Apply verified fixes",
+      "as": "fixes",
+      "task": "Apply verified review fixes as the sole active-worktree writer.\n\nShipping scope: {task}\nScope: {outputs.scope}\nReview verdict: {outputs.preFixReview}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen all referenced artifacts and ledger records. Apply only verified fixes worth doing now, update resolved findings with expected revisions after focused validation, inspect the final diff, and return an auditable handoff. Do not commit or push.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "implementation/fix-handoff.md",
+      "outputMode": "file-only",
+      "progress": true,
+      "acceptance": "checked"
+    },
+    {
+      "phase": "Post-fix validation",
+      "parallel": [
+        {
+          "agent": "pi-shipyard.contract-reviewer",
+          "label": "Contract validation",
+          "as": "postContracts",
+          "task": "Validate contract behavior after fixes for: {task}\nScope: {outputs.scope}\nReview: {outputs.preFixReview}\nFix handoff: {outputs.fixes}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen references and inspect final diff. Verify resolved findings and add only distinct defects with stage `post-fix-contracts` and sourceRole `pi-shipyard.contract-reviewer`. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "validation/post-fix-contracts.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.runtime-reviewer",
+          "label": "Runtime validation",
+          "as": "postRuntime",
+          "task": "Validate runtime/state/error/cleanup behavior after fixes for: {task}\nScope: {outputs.scope}\nReview: {outputs.preFixReview}\nFix handoff: {outputs.fixes}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen references and inspect final diff. Verify resolved findings and add only distinct defects with stage `post-fix-runtime` and sourceRole `pi-shipyard.runtime-reviewer`. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "validation/post-fix-runtime.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.adversarial-tester",
+          "label": "Adversarial validation",
+          "as": "postAdversarial",
+          "task": "Re-run focused counterexamples after fixes for: {task}\nScope: {outputs.scope}\nReview: {outputs.preFixReview}\nFix handoff: {outputs.fixes}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen references, run safe targeted checks, verify resolved findings, and add only distinct defects with stage `post-fix-adversarial` and sourceRole `pi-shipyard.adversarial-tester`. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "validation/post-fix-adversarial.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        }
+      ],
+      "concurrency": 3,
+      "failFast": false
+    },
+    {
+      "agent": "pi-shipyard.falsifier",
+      "phase": "Post-fix validation",
+      "label": "Adjudicate final findings",
+      "as": "postFalsification",
+      "task": "Adjudicate post-fix findings for: {task}\nFix handoff: {outputs.fixes}\nReceipts: {outputs.postContracts} {outputs.postRuntime} {outputs.postAdversarial}\nFindings store: {{SHIPYARD_STORE}}\n\nSnapshot with stage label `post-fix-review`, verify/reject new findings, and confirm resolved dispositions with expected revisions. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "validation/post-fix-falsification.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 24,
+        "hard": 40,
+        "block": "*"
+      }
+    },
+    {
+      "agent": "pi-shipyard.shipwright",
+      "phase": "Shipping readiness",
+      "label": "Prepare shipping handoff",
+      "as": "final",
+      "task": "Prepare the final shipping-readiness handoff for: {task}\nScope: {outputs.scope}\nPre-fix review: {outputs.preFixReview}\nFix handoff: {outputs.fixes}\nPost-fix validation: {outputs.postContracts} {outputs.postRuntime} {outputs.postAdversarial} {outputs.postFalsification}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen every referenced artifact and inspect final diff/status. Export the ledger to {{SHIPYARD_RUN_DIR}}/findings.md. Run or confirm required gates and return READY TO SHIP, NOT READY, or NEEDS DECISION with evidence and exact next commands. Reserve NEEDS DECISION for irreversible or destructive actions needing explicit user authorization; decide reversible choices yourself and list them under Decisions made autonomously. When the change has user-visible behavior, include a Behavior check section with the exact click-path and expected results. Never commit, push, publish, deploy, or open a PR.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.\n\nUse creation stage `final-validation` and sourceRole `pi-shipyard.shipwright` for any new finding.",
+      "output": "shipping/final-handoff.md",
+      "outputMode": "inline",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      }
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "name": "review-ui",
+  "package": "pi-shipyard",
+  "description": "UI-focused staged review with contract, runtime, adversarial, accessibility, and user-flow analysis.",
+  "chain": [
+    {
+      "agent": "pi-shipyard.codebase-reader",
+      "phase": "Scope",
+      "label": "Map UI flow",
+      "as": "scope",
+      "task": "Build a compact UI review brief for: {task}\n\nRead repository instructions, current diff, components, state/data flow, design-system patterns, UI tests, and user-facing requirements. Map primary and error flows, asynchronous states, accessibility boundaries, and available browser/visual validation. Do not edit project/source files.",
+      "output": "scope/ui-review-brief.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 18,
+        "hard": 30,
+        "block": "*"
+      }
+    },
+    {
+      "phase": "Independent discovery",
+      "parallel": [
+        {
+          "agent": "pi-shipyard.contract-reviewer",
+          "label": "User contract",
+          "as": "contracts",
+          "task": "Review requested UI behavior and state contracts for: {task}\nScope: {outputs.scope}\nFindings store: {{SHIPYARD_STORE}}\nRecord concrete defects with review_findings. Stay independent and do not edit project/source files.\n\nUse stage `wave-1-contracts` and sourceRole `pi-shipyard.contract-reviewer` for new findings.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-contracts.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.runtime-reviewer",
+          "label": "UI state flow",
+          "as": "runtime",
+          "task": "Trace UI events, asynchronous state, stale updates, duplicate actions, navigation, cleanup, and errors for: {task}\nScope: {outputs.scope}\nFindings store: {{SHIPYARD_STORE}}\nRecord concrete defects with review_findings. Stay independent and do not edit project/source files.\n\nUse stage `wave-1-runtime` and sourceRole `pi-shipyard.runtime-reviewer` for new findings.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-runtime.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.adversarial-tester",
+          "label": "Interaction counterexamples",
+          "as": "adversarial",
+          "task": "Construct user-flow and state counterexamples for: {task}\nScope: {outputs.scope}\nFindings store: {{SHIPYARD_STORE}}\nExercise existing UI tests/browser tools when available and record concrete defects with review_findings. Stay independent and do not edit project/source files.\n\nUse stage `wave-1-adversarial` and sourceRole `pi-shipyard.adversarial-tester` for new findings.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-adversarial.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 18,
+            "hard": 30,
+            "block": "*"
+          }
+        },
+        {
+          "agent": "pi-shipyard.ui-reviewer",
+          "label": "UX and accessibility",
+          "as": "ui",
+          "task": "Review user flow, accessibility, semantics, keyboard/focus behavior, copy, responsive layout, and visual states for: {task}\nScope: {outputs.scope}\nFindings store: {{SHIPYARD_STORE}}\nRecord concrete affected-user defects with review_findings. Stay independent and do not edit project/source files.\n\nUse stage `wave-1-ui` and sourceRole `pi-shipyard.ui-reviewer` for new findings.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "output": "review/wave-1-ui.md",
+          "outputMode": "file-only",
+          "progress": false,
+          "acceptance": {
+            "level": "none",
+            "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+          },
+          "toolBudget": {
+            "soft": 20,
+            "hard": 32,
+            "block": "*"
+          }
+        }
+      ],
+      "concurrency": 4,
+      "failFast": false
+    },
+    {
+      "agent": "pi-shipyard.falsifier",
+      "label": "Verify UI findings",
+      "as": "falsification",
+      "task": "Verify or reject every proposed UI finding for: {task}\nScope: {outputs.scope}\nReceipts: {outputs.contracts} {outputs.runtime} {outputs.adversarial} {outputs.ui}\nFindings store: {{SHIPYARD_STORE}}\nFirst snapshot the store with review_findings using stage label wave-1. Inspect framework/design-system guarantees and update dispositions with expected revisions. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "review/wave-2-falsification.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "phase": "Cross-examination",
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 24,
+        "hard": 40,
+        "block": "*"
+      }
+    },
+    {
+      "agent": "pi-shipyard.blindspot-hunter",
+      "label": "Uncovered UI states",
+      "as": "blindspots",
+      "task": "Audit uncovered user flows, states, viewport/accessibility cases, and sibling components for: {task}\nScope: {outputs.scope}\nReceipts: {outputs.contracts} {outputs.runtime} {outputs.adversarial} {outputs.ui}\nFindings store: {{SHIPYARD_STORE}}\nFalsification receipt: {outputs.falsification}\nFirst snapshot the store with review_findings using stage label post-falsification. Add only distinct concrete findings. Do not edit project/source files.\n\nUse stage `wave-2-blindspots` and sourceRole `pi-shipyard.blindspot-hunter` for new findings.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "review/wave-2-blindspots.md",
+      "outputMode": "file-only",
+      "progress": false,
+      "phase": "Cross-examination",
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 20,
+        "hard": 34,
+        "block": "*"
+      }
+    },
+    {
+      "agent": "pi-shipyard.review-synthesizer",
+      "phase": "Synthesis",
+      "label": "UI verdict",
+      "as": "final",
+      "task": "Produce the compact final UI verdict for: {task}\nScope: {outputs.scope}\nWave 1: {outputs.contracts} {outputs.runtime} {outputs.adversarial} {outputs.ui}\nWave 2: {outputs.falsification} {outputs.blindspots}\nFindings store: {{SHIPYARD_STORE}}\nSnapshot the store with review_findings using stage label post-blindspot. Export the ledger to {{SHIPYARD_RUN_DIR}}/findings.md. Report verified affected-user failures, unresolved risks, rejected/deferred claims, coverage gaps, and precise browser/manual validation. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "output": "review/final.md",
+      "outputMode": "inline",
+      "progress": false,
+      "acceptance": {
+        "level": "none",
+        "reason": "Read-only analysis or validation; only configured artifacts and the run-scoped findings ledger may be written."
+      },
+      "toolBudget": {
+        "soft": 24,
+        "hard": 40,
+        "block": "*"
+      }
+    }
+  ]
+}
