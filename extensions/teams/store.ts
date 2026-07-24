@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-export type MemberStatus = "running" | "idle" | "failed" | "stopped";
+export type MemberStatus = "running" | "stopping" | "idle" | "failed" | "stopped";
 export type TaskStatus = "pending" | "in_progress" | "completed";
 
 export interface TeamMember {
@@ -43,6 +43,9 @@ export interface TeamConfig {
 	goal: string;
 	leadSessionId?: string;
 	createdAt: number;
+	/** A disband was accepted for every active member; mutations stay blocked
+	 * while the lead waits for terminal completion artifacts. */
+	closing?: boolean;
 	closed: boolean;
 	members: TeamMember[];
 }
@@ -87,8 +90,18 @@ export function sanitizeName(raw: string): string {
 	return cleaned;
 }
 
+export function sanitizeMemberName(raw: string): string {
+	const cleaned = sanitizeName(raw);
+	if (cleaned === LEAD || cleaned === "all") {
+		throw new Error(`Member name '${cleaned}' is reserved. Choose a name other than '${LEAD}' or 'all'.`);
+	}
+	return cleaned;
+}
+
 export function teamDir(name: string): string {
-	return path.join(teamsRoot(), name);
+	const canonical = sanitizeName(name);
+	if (canonical !== name) throw new Error(`Team name '${name}' is not canonical; expected '${canonical}'.`);
+	return path.join(teamsRoot(), canonical);
 }
 
 export function listTeamNames(): string[] {
@@ -170,24 +183,40 @@ export function writeJsonAtomic(file: string, data: unknown): void {
 // Team config
 // ---------------------------------------------------------------------------
 
-export function createTeam(name: string, goal: string, leadSessionId?: string): TeamConfig {
+export function createTeam(name: string, goal: string, leadSessionId: string): TeamConfig {
+	if (!leadSessionId.trim()) throw new Error("Creating an Agent Team requires a persistent lead session id.");
 	const dir = teamDir(name);
-	if (fs.existsSync(path.join(dir, "config.json"))) throw new Error(`Team '${name}' already exists at ${dir}.`);
-	const config: TeamConfig = {
-		version: 1,
-		name,
-		goal,
-		leadSessionId,
-		createdAt: Date.now(),
-		closed: false,
-		members: [],
-	};
-	return withLock(dir, () => {
-		writeJsonAtomic(path.join(dir, "config.json"), config);
-		writeJsonAtomic(path.join(dir, "tasks.json"), { version: 1, tasks: [] });
-		fs.mkdirSync(path.join(dir, "inboxes"), { recursive: true });
-		fs.mkdirSync(path.join(dir, "notes"), { recursive: true });
-		return config;
+	const creationLockDir = path.join(teamsRoot(), ".creation-lock");
+	return withLock(creationLockDir, () => {
+		if (fs.existsSync(path.join(dir, "config.json"))) throw new Error(`Team '${name}' already exists at ${dir}.`);
+		const existing = listTeamNames().find((candidate) => {
+			try {
+				const config = loadConfig(teamDir(candidate));
+				return config.leadSessionId === leadSessionId && !config.closed;
+			} catch {
+				return false;
+			}
+		});
+		if (existing) throw new Error(`Lead session '${leadSessionId}' already owns open team '${existing}'.`);
+		return withLock(dir, () => {
+			// Recheck under the team-specific lock as a defense against older writers
+			// that do not participate in the global creation lock.
+			if (fs.existsSync(path.join(dir, "config.json"))) throw new Error(`Team '${name}' already exists at ${dir}.`);
+			const config: TeamConfig = {
+				version: 1,
+				name,
+				goal,
+				leadSessionId,
+				createdAt: Date.now(),
+				closed: false,
+				members: [],
+			};
+			writeJsonAtomic(path.join(dir, "config.json"), config);
+			writeJsonAtomic(path.join(dir, "tasks.json"), { version: 1, tasks: [] });
+			fs.mkdirSync(path.join(dir, "inboxes"), { recursive: true });
+			fs.mkdirSync(path.join(dir, "notes"), { recursive: true });
+			return config;
+		});
 	});
 }
 
@@ -201,6 +230,20 @@ export function saveConfig(dir: string, config: TeamConfig): void {
 	withLock(dir, () => {
 		writeJsonAtomic(path.join(dir, "config.json"), config);
 	});
+}
+
+function assertTeamMutationAllowed(dir: string, caller: string, action: string): TeamConfig {
+	const config = loadConfig(dir);
+	if (config.closed || config.closing) {
+		throw new Error(`Team '${config.name}' is ${config.closed ? "closed" : "closing"}; cannot ${action}.`);
+	}
+	if (caller !== LEAD) {
+		const member = config.members.find((candidate) => candidate.name === caller);
+		if (!member || member.status !== "running") {
+			throw new Error(`Teammate '${caller}' is ${member?.status ?? "unregistered"}; cannot ${action}.`);
+		}
+	}
+	return config;
 }
 
 export function updateConfig<T>(dir: string, mutate: (config: TeamConfig) => T): T {
@@ -242,6 +285,7 @@ export function decorateTasks(tasks: TeamTask[]): Array<TeamTask & { blocked: bo
 
 export function createTask(dir: string, input: { title: string; description?: string; deps?: string[]; createdBy: string }): TeamTask {
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, input.createdBy, "create a task");
 		const file = readJson<TaskFile>(tasksPath(dir), { version: 1, tasks: [] });
 		for (const dep of input.deps ?? []) {
 			if (!file.tasks.some((t) => t.id === dep)) throw new Error(`Dependency task '${dep}' does not exist.`);
@@ -274,6 +318,7 @@ export function updateTask(
 	patch: { title?: string; description?: string; status?: TaskStatus; deps?: string[] },
 ): TeamTask {
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, caller, "update a task");
 		const file = readJson<TaskFile>(tasksPath(dir), { version: 1, tasks: [] });
 		const task = file.tasks.find((t) => t.id === id);
 		if (!task) throw new Error(`Task '${id}' not found.`);
@@ -303,6 +348,7 @@ export function updateTask(
 
 export function claimTask(dir: string, id: string, caller: string): TeamTask {
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, caller, "claim a task");
 		const file = readJson<TaskFile>(tasksPath(dir), { version: 1, tasks: [] });
 		const task = file.tasks.find((t) => t.id === id);
 		if (!task) throw new Error(`Task '${id}' not found.`);
@@ -321,6 +367,7 @@ export function claimTask(dir: string, id: string, caller: string): TeamTask {
 
 export function claimNextTask(dir: string, caller: string): TeamTask | null {
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, caller, "claim a task");
 		const file = readJson<TaskFile>(tasksPath(dir), { version: 1, tasks: [] });
 		const task = file.tasks.find((t) => t.status === "pending" && !t.owner && !isTaskBlocked(t, file.tasks));
 		if (!task) return null;
@@ -334,6 +381,7 @@ export function claimNextTask(dir: string, caller: string): TeamTask | null {
 
 export function completeTask(dir: string, id: string, caller: string): TeamTask {
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, caller, "complete a task");
 		const file = readJson<TaskFile>(tasksPath(dir), { version: 1, tasks: [] });
 		const task = file.tasks.find((t) => t.id === id);
 		if (!task) throw new Error(`Task '${id}' not found.`);
@@ -351,17 +399,59 @@ export function completeTask(dir: string, id: string, caller: string): TeamTask 
 // Mailboxes
 // ---------------------------------------------------------------------------
 
+function memberStoragePath(dir: string, area: "inboxes" | "notes", member: string, suffix: string): string {
+	if (member !== LEAD) {
+		if (member === "all" || !/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(member)) {
+			throw new Error(`Unsafe team member storage key '${member}'.`);
+		}
+	}
+	const base = path.resolve(dir, area);
+	const file = path.resolve(base, `${member}${suffix}`);
+	if (path.dirname(file) !== base) throw new Error(`Unsafe team member storage path '${member}'.`);
+	return file;
+}
+
+function verifiedNotesPath(dir: string, member: string): { file: string; realArea: string } {
+	const file = memberStoragePath(dir, "notes", member, ".md");
+	const teamStat = fs.lstatSync(dir);
+	const area = path.resolve(dir, "notes");
+	const areaStat = fs.lstatSync(area);
+	if (teamStat.isSymbolicLink() || areaStat.isSymbolicLink() || !teamStat.isDirectory() || !areaStat.isDirectory()) {
+		throw new Error(`Unsafe symlinked team notes directory for '${member}'.`);
+	}
+	const realTeam = fs.realpathSync.native(dir);
+	const realArea = fs.realpathSync.native(area);
+	if (path.dirname(realArea) !== realTeam) throw new Error(`Unsafe team notes directory for '${member}'.`);
+	try {
+		const noteStat = fs.lstatSync(file);
+		if (noteStat.isSymbolicLink()) throw new Error(`Unsafe symlinked team note '${member}'.`);
+		if (!noteStat.isFile()) throw new Error(`Team note '${member}' is not a regular file.`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return { file, realArea };
+}
+
+function verifyOpenedNote(fd: number, file: string, realArea: string, member: string): void {
+	const stat = fs.fstatSync(fd);
+	if (!stat.isFile()) throw new Error(`Team note '${member}' is not a regular file.`);
+	if (stat.nlink !== 1) throw new Error(`Team note '${member}' must not be hard-linked.`);
+	const realFile = fs.realpathSync.native(file);
+	if (path.dirname(realFile) !== realArea) throw new Error(`Unsafe team note target '${member}'.`);
+}
+
 function inboxPath(dir: string, member: string): string {
-	return path.join(dir, "inboxes", `${member}.json`);
+	return memberStoragePath(dir, "inboxes", member, ".json");
 }
 
 function cursorPath(dir: string, member: string): string {
-	return path.join(dir, "inboxes", `${member}.cursor`);
+	return memberStoragePath(dir, "inboxes", member, ".cursor");
 }
 
 export function sendMessage(dir: string, from: string, to: string, message: string, members: string[]): string[] {
 	const recipients = to === "all" ? [LEAD, ...members].filter((m) => m !== from) : [to];
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, from, "send team mail");
 		const delivered: string[] = [];
 		for (const recipient of recipients) {
 			const file = inboxPath(dir, recipient);
@@ -405,6 +495,7 @@ export function readInbox(dir: string, member: string, markRead: boolean): TeamM
 	// blocking on a lock held by a crashed process.
 	if (!markRead) return readUnread();
 	return withLock(dir, () => {
+		assertTeamMutationAllowed(dir, member, "advance the inbox cursor");
 		const unread = readUnread();
 		if (unread.length > 0) {
 			const watermark = Math.max(...unread.map((m) => m.ts));
@@ -422,17 +513,35 @@ export function inboxSize(dir: string, member: string): number {
 // Notes
 // ---------------------------------------------------------------------------
 
-export function appendNote(dir: string, member: string, content: string): void {
-	const file = path.join(dir, "notes", `${member}.md`);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	fs.appendFileSync(file, `\n\n## ${new Date().toISOString()}\n\n${content.trim()}\n`, "utf8");
+export function appendNote(dir: string, member: string, content: string, caller = member): void {
+	verifiedNotesPath(dir, member);
+	withLock(dir, () => {
+		assertTeamMutationAllowed(dir, caller, "append team notes");
+		const { file, realArea } = verifiedNotesPath(dir, member);
+		const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
+		try {
+			verifyOpenedNote(fd, file, realArea, member);
+			fs.writeFileSync(fd, `\n\n## ${new Date().toISOString()}\n\n${content.trim()}\n`, "utf8");
+		} finally {
+			fs.closeSync(fd);
+		}
+	});
 }
 
 export function readNotes(dir: string, member: string): string {
+	const { file, realArea } = verifiedNotesPath(dir, member);
+	let fd: number;
 	try {
-		return fs.readFileSync(path.join(dir, "notes", `${member}.md`), "utf8").trim();
-	} catch {
-		return "";
+		fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+		throw error;
+	}
+	try {
+		verifyOpenedNote(fd, file, realArea, member);
+		return fs.readFileSync(fd, "utf8").trim();
+	} finally {
+		fs.closeSync(fd);
 	}
 }
 

@@ -23,7 +23,7 @@ If teammates wouldn't need to talk to each other, use pi-subagents instead.
 4. **Spawn**: `team_spawn({name, role, task})` per teammate. The task is their full briefing: goal, ownership boundary, deliverables, and who else is on the team. Use `agent: "pi-agent-teams.scout"` for read-only research/review slices; default teammates can write.
 5. **Coordinate**: mail arrives automatically — yours batched, teammates' injected mid-flight. Answer blockers, reassign tasks, steer via `team_send`. Check `team_status` when unsure.
 6. **Respawn**: finished teammates can get more work — `team_spawn` with the same name; they resume from their `team_notes`.
-7. **Synthesize + disband**: when the goal is met, pull results together, verify the assembled work yourself, then `team_disband`.
+7. **Synthesize + disband**: when the goal is met, pull results together, verify the assembled work yourself, then `team_disband`. Stop acknowledgements remain `stopping`; the team closes only after terminal completion is confirmed. If any stop request fails, resolve or retry it rather than respawning that member.
 
 ## Lead discipline
 

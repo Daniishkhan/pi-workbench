@@ -199,7 +199,7 @@ Workbench acquires a lease for:
 - write-capable team members;
 - dynamic workflows declaring `write` permission.
 
-Read-only work can still run concurrently. Unknown custom team agents fail closed as writers unless `team_spawn.write` is explicitly false. An uncertain launch retains its lease.
+Read-only work can still run concurrently. Unknown custom team agents always fail closed as writers; `team_spawn.write: false` cannot downgrade an unregistered tool surface. Writer keys resolve to the canonical Git worktree root, while linked worktrees remain independent. An uncertain launch retains its lease.
 
 Inspect leases with `/workbench`. Manual recovery is available through `/workbench release-writer`, which requires interactive confirmation and should be used only after confirming the old writer is gone.
 

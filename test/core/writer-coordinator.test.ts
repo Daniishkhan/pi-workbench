@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -51,6 +53,86 @@ test("stale tokens cannot mutate or release a replacement lease", () => {
 	assert.equal(first.release(stale.token), false);
 	assert.equal(first.get(cwd)?.token, replacement.token);
 	assert.equal(first.get(cwd)?.runId, undefined);
+});
+
+test("canonicalizes every nested directory in one Git worktree to the same writer key", () => {
+	const base = root();
+	const repo = path.join(base, "checkout");
+	const nested = path.join(repo, "packages", "app");
+	fs.mkdirSync(nested, { recursive: true });
+	execFileSync("git", ["init", "--quiet", repo]);
+	const coordinator = new WriterCoordinator({ rootDir: path.join(base, "leases"), processAlive: () => true });
+	const lease = coordinator.acquire(repo, "root-writer")!;
+	assert.equal(lease.cwd, fs.realpathSync.native(repo));
+	assert.equal(coordinator.get(nested)?.token, lease.token);
+	assert.throws(() => coordinator.acquire(nested, "nested-writer"), /already owns/);
+	assert.equal(coordinator.releaseCwd(path.join(repo, "packages")), true);
+});
+
+test("falls back to the validated .git ancestor when Git discovery cannot run", () => {
+	const base = root();
+	const repo = path.join(base, "checkout");
+	const nested = path.join(repo, "nested", "deep");
+	fs.mkdirSync(nested, { recursive: true });
+	execFileSync("git", ["init", "--quiet", repo]);
+	const previousPath = process.env.PATH;
+	const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
+	try {
+		process.env.PATH = "";
+		process.env.GIT_CEILING_DIRECTORIES = repo;
+		const coordinator = new WriterCoordinator({ rootDir: path.join(base, "leases"), processAlive: () => true });
+		const lease = coordinator.acquire(repo, "root-writer")!;
+		assert.equal(coordinator.get(nested)?.token, lease.token);
+		assert.throws(() => coordinator.acquire(nested, "nested-writer"), /already owns/);
+	} finally {
+		if (previousPath === undefined) delete process.env.PATH;
+		else process.env.PATH = previousPath;
+		if (previousCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+		else process.env.GIT_CEILING_DIRECTORIES = previousCeiling;
+	}
+});
+
+test("keeps linked Git worktrees independent", () => {
+	const base = root();
+	const repo = path.join(base, "primary");
+	const linked = path.join(base, "linked");
+	fs.mkdirSync(repo);
+	execFileSync("git", ["init", "--quiet", repo]);
+	fs.writeFileSync(path.join(repo, "README.md"), "test\n");
+	execFileSync("git", ["-C", repo, "add", "README.md"]);
+	execFileSync("git", ["-C", repo, "-c", "user.name=Pi Test", "-c", "user.email=pi@example.invalid", "commit", "--quiet", "-m", "init"]);
+	execFileSync("git", ["-C", repo, "worktree", "add", "--quiet", "--detach", linked, "HEAD"]);
+	const coordinator = new WriterCoordinator({ rootDir: path.join(base, "leases"), processAlive: () => true });
+	const primary = coordinator.acquire(repo, "primary")!;
+	const secondary = coordinator.acquire(linked, "linked")!;
+	assert.notEqual(primary.cwd, secondary.cwd);
+	assert.notEqual(primary.token, secondary.token);
+});
+
+test("finds and releases legacy subdirectory-keyed leases after worktree-root migration", () => {
+	const base = root();
+	const repo = path.join(base, "checkout");
+	const nested = path.join(repo, "nested");
+	const leases = path.join(base, "leases");
+	fs.mkdirSync(nested, { recursive: true });
+	execFileSync("git", ["init", "--quiet", repo]);
+	const legacyCwd = fs.realpathSync.native(nested);
+	const legacyDir = path.join(leases, createHash("sha256").update(legacyCwd).digest("hex"));
+	fs.mkdirSync(legacyDir, { recursive: true });
+	fs.writeFileSync(path.join(legacyDir, "owner.json"), `${JSON.stringify({
+		version: 1,
+		token: "legacy-token",
+		cwd: legacyCwd,
+		owner: "legacy-writer",
+		createdAt: Date.now(),
+		pid: process.pid,
+	})}\n`);
+	fs.rmSync(nested, { recursive: true });
+	const coordinator = new WriterCoordinator({ rootDir: leases, processAlive: () => true });
+	assert.equal(coordinator.get(repo)?.token, "legacy-token");
+	assert.throws(() => coordinator.acquire(repo, "new-writer"), /legacy-writer/);
+	assert.equal(coordinator.releaseCwd(repo), true);
+	assert.equal(fs.existsSync(legacyDir), false);
 });
 
 test("canonicalizes symlink aliases to the same writer key", () => {

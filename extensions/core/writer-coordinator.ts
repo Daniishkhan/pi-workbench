@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -43,13 +44,51 @@ function writeJsonAtomic(file: string, value: unknown): void {
 	fs.renameSync(temp, file);
 }
 
-export function canonicalWriterCwd(cwd: string): string {
-	const resolved = path.resolve(cwd);
+function canonicalPath(value: string): string {
+	const resolved = path.resolve(value);
 	try {
 		return fs.realpathSync.native(resolved);
 	} catch {
 		return resolved;
 	}
+}
+
+function markerWorktreeRoot(start: string): string | undefined {
+	let current = start;
+	for (;;) {
+		try {
+			const marker = fs.lstatSync(path.join(current, ".git"));
+			if (marker.isDirectory() || marker.isFile() || marker.isSymbolicLink()) return canonicalPath(current);
+		} catch {
+			// No marker at this level.
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+/** Resolve every directory inside one Git checkout to the checkout's worktree
+ * root. Linked worktrees remain independent because --show-toplevel returns the
+ * concrete root of the active worktree, not the shared Git common directory. */
+export function canonicalWriterCwd(cwd: string): string {
+	const resolved = canonicalPath(cwd);
+	let probe = resolved;
+	while (!fs.existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+	try {
+		const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")));
+		const worktree = execFileSync("git", ["-C", probe, "rev-parse", "--show-toplevel"], {
+			encoding: "utf8",
+			env: { ...env, GIT_OPTIONAL_LOCKS: "0" },
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 5_000,
+		}).trim();
+		if (worktree) return canonicalPath(worktree);
+	} catch {
+		// Fall through to a conservative marker walk. This preserves worktree-wide
+		// exclusion when Git is absent or refuses discovery (for example safe.directory).
+	}
+	return markerWorktreeRoot(probe) ?? resolved;
 }
 
 function parseLease(value: unknown): WriterLease | undefined {
@@ -70,6 +109,11 @@ interface OperationLock {
 	token: string;
 	pid: number;
 	createdAt: number;
+}
+
+interface LocatedLease {
+	lease: WriterLease;
+	dir: string;
 }
 
 function readOperationLock(file: string): OperationLock | undefined {
@@ -121,6 +165,28 @@ export class WriterCoordinator {
 		}
 	}
 
+	#locatedLeases(): LocatedLease[] {
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(this.#rootDir, { withFileTypes: true });
+		} catch {
+			return [];
+		}
+		return entries
+			.filter((entry) => entry.isDirectory() && /^[a-f0-9]{64}$/.test(entry.name))
+			.flatMap((entry) => {
+				const dir = path.join(this.#rootDir, entry.name);
+				const lease = this.#readDir(dir);
+				return lease ? [{ lease, dir }] : [];
+			})
+			.sort((a, b) => a.lease.createdAt - b.lease.createdAt);
+	}
+
+	#locatedForCwd(cwd: string): LocatedLease[] {
+		const canonical = canonicalWriterCwd(cwd);
+		return this.#locatedLeases().filter(({ lease }) => canonicalWriterCwd(lease.cwd) === canonical);
+	}
+
 	#withCwdLock<T>(cwd: string, operation: () => T): T {
 		fs.mkdirSync(this.#rootDir, { recursive: true, mode: 0o700 });
 		const file = this.#lockFile(cwd);
@@ -169,15 +235,20 @@ export class WriterCoordinator {
 		if (!owner.trim()) throw new Error("Workbench writer guard requires a non-empty owner label.");
 		const canonical = canonicalWriterCwd(cwd);
 		return this.#withCwdLock(canonical, () => {
-			const dir = this.#dir(canonical);
-			const existing = this.#readDir(dir);
-			if (existing && !existing.runId && !existing.uncertain && !this.#processAlive(existing.pid)) {
-				fs.rmSync(dir, { recursive: true, force: true });
-			} else if (fs.existsSync(dir)) {
-				const detail = existing
-					? `'${existing.owner}' already owns ${canonical}${existing.runId ? ` (run ${existing.runId})` : ""}${existing.uncertain ? " (launch uncertain)" : ""}`
-					: `an unreadable lease already exists for ${canonical}`;
+			for (const existing of this.#locatedForCwd(canonical)) {
+				if (!existing.lease.runId && !existing.lease.uncertain && !this.#processAlive(existing.lease.pid)) {
+					fs.rmSync(existing.dir, { recursive: true, force: true });
+				}
+			}
+			const blocking = this.#locatedForCwd(canonical)[0];
+			if (blocking) {
+				const existing = blocking.lease;
+				const detail = `'${existing.owner}' already owns ${canonical}${existing.runId ? ` (run ${existing.runId})` : ""}${existing.uncertain ? " (launch uncertain)" : ""}`;
 				throw new Error(`Workbench writer guard: ${detail}. Wait for it to finish, inspect /workbench, or use an isolated worktree.`);
+			}
+			const dir = this.#dir(canonical);
+			if (fs.existsSync(dir)) {
+				throw new Error(`Workbench writer guard: an unreadable lease already exists for ${canonical}. Wait for it to finish, inspect /workbench, or use an isolated worktree.`);
 			}
 			const lease: WriterLease = {
 				version: 1,
@@ -201,13 +272,12 @@ export class WriterCoordinator {
 
 	#update(token: string | undefined, mutate: (lease: WriterLease) => WriterLease): boolean {
 		if (!token) return false;
-		const candidate = this.list().find((lease) => lease.token === token);
+		const candidate = this.#locatedLeases().find(({ lease }) => lease.token === token);
 		if (!candidate) return false;
-		return this.#withCwdLock(candidate.cwd, () => {
-			const dir = this.#dir(candidate.cwd);
-			const current = this.#readDir(dir);
+		return this.#withCwdLock(candidate.lease.cwd, () => {
+			const current = this.#readDir(candidate.dir);
 			if (current?.token !== token) return false;
-			writeJsonAtomic(path.join(dir, "owner.json"), mutate(current));
+			writeJsonAtomic(path.join(candidate.dir, "owner.json"), mutate(current));
 			return true;
 		});
 	}
@@ -223,12 +293,11 @@ export class WriterCoordinator {
 
 	release(token: string | undefined): boolean {
 		if (!token) return false;
-		const candidate = this.list().find((lease) => lease.token === token);
+		const candidate = this.#locatedLeases().find(({ lease }) => lease.token === token);
 		if (!candidate) return false;
-		return this.#withCwdLock(candidate.cwd, () => {
-			const dir = this.#dir(candidate.cwd);
-			if (this.#readDir(dir)?.token !== token) return false;
-			fs.rmSync(dir, { recursive: true, force: true });
+		return this.#withCwdLock(candidate.lease.cwd, () => {
+			if (this.#readDir(candidate.dir)?.token !== token) return false;
+			fs.rmSync(candidate.dir, { recursive: true, force: true });
 			return true;
 		});
 	}
@@ -241,31 +310,20 @@ export class WriterCoordinator {
 	releaseCwd(cwd: string): boolean {
 		const canonical = canonicalWriterCwd(cwd);
 		return this.#withCwdLock(canonical, () => {
-			const dir = this.#dir(canonical);
-			if (!fs.existsSync(dir)) return false;
-			fs.rmSync(dir, { recursive: true, force: true });
-			return true;
+			const dirs = new Set(this.#locatedForCwd(canonical).map(({ dir }) => dir));
+			const canonicalDir = this.#dir(canonical);
+			if (fs.existsSync(canonicalDir)) dirs.add(canonicalDir);
+			for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+			return dirs.size > 0;
 		});
 	}
 
 	get(cwd: string): WriterLease | undefined {
-		const lease = this.#readDir(this.#dir(canonicalWriterCwd(cwd)));
+		const lease = this.#locatedForCwd(cwd)[0]?.lease;
 		return lease ? { ...lease } : undefined;
 	}
 
 	list(): WriterLease[] {
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(this.#rootDir, { withFileTypes: true });
-		} catch {
-			return [];
-		}
-		return entries
-			.filter((entry) => entry.isDirectory() && /^[a-f0-9]{64}$/.test(entry.name))
-			.flatMap((entry) => {
-				const lease = this.#readDir(path.join(this.#rootDir, entry.name));
-				return lease ? [{ ...lease }] : [];
-			})
-			.sort((a, b) => a.createdAt - b.createdAt);
+		return this.#locatedLeases().map(({ lease }) => ({ ...lease }));
 	}
 }

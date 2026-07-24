@@ -35,9 +35,11 @@ import {
 	decorateTasks,
 	findMemberByRunId,
 	listTasks,
+	listTeamNames,
 	loadConfig,
 	readInbox,
 	readNotes,
+	sanitizeMemberName,
 	sanitizeName,
 	sendMessage,
 	teamDir,
@@ -63,14 +65,20 @@ const MAIL_INJECT_MIN_INTERVAL_MS = 15_000;
 const MAIL_INJECT_MAX_MESSAGES = 20;
 /** Terminal states in pi-subagents' documented status.json lifecycle artifact. */
 const TERMINAL_RUN_STATES = new Set(["complete", "completed", "failed", "stopped", "timed_out", "timeout"]);
+
+/** status.json may advertise stopped/failed as soon as cancellation begins.
+ * A terminal state is authoritative only once the runner writes endedAt or the
+ * separate result artifact exists. */
+export function isConfirmedTerminalRunArtifact(state: string, hasResult: boolean, endedAt?: unknown): boolean {
+	return TERMINAL_RUN_STATES.has(state) && (hasResult || (typeof endedAt === "number" && Number.isFinite(endedAt) && endedAt > 0));
+}
 /** A running member whose run artifacts are entirely missing for this long is
  * marked failed: the process was lost or the OS cleaned the temp dir (reboot). */
 const LOST_RUN_GRACE_MS = 10 * 60_000;
 
-const isChildSession = Boolean(process.env[CHILD_ENV]);
-
 interface TeamsState {
 	activeTeam?: string;
+	currentSessionId?: string;
 	poller?: ReturnType<typeof setInterval>;
 	rpc: SubagentRpcClient | null;
 	lastMailInjectAt: number;
@@ -83,10 +91,15 @@ interface TeamsState {
 export interface RegisterTeamsOptions {
 	writerCoordinator?: WriterCoordinator;
 	rpc?: SubagentRpcClient;
+	/** Test/embedded-host override. Production registration derives this from PI_SUBAGENT_CHILD. */
+	childSession?: boolean;
+	/** Test/embedded-host override. Production registration derives this from PI_SUBAGENT_RUN_ID. */
+	runId?: string;
 }
 
 export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOptions = {}) {
 	const events = (pi as unknown as { events: RpcEventBus }).events;
+	const isChildSession = options.childSession ?? Boolean(process.env[CHILD_ENV]);
 	const state: TeamsState = { rpc: options.rpc ?? null, lastMailInjectAt: 0 };
 
 	// -----------------------------------------------------------------------
@@ -106,19 +119,41 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		return state.rpc;
 	}
 
-	function activeTeamDir(team?: string): { name: string; dir: string; config: TeamConfig } {
-		const name = team ?? state.activeTeam;
+	function isActiveMemberStatus(status: TeamMember["status"]): boolean {
+		return status === "running" || status === "stopping";
+	}
+
+	function activeTeamDir(assertedTeam?: string): { name: string; dir: string; config: TeamConfig } {
+		const name = state.activeTeam;
 		if (!name) throw new Error("No active team. Create one with team_create (or /team new <goal>).");
+		if (assertedTeam && assertedTeam !== name) {
+			throw new Error(`Team assertion '${assertedTeam}' does not match this session's active team '${name}'.`);
+		}
 		const dir = teamDir(name);
 		const config = loadConfig(dir);
+		if (!state.currentSessionId || config.leadSessionId !== state.currentSessionId) {
+			throw new Error(`Pi session '${state.currentSessionId ?? "unknown"}' is not the registered lead for team '${name}'.`);
+		}
 		return { name, dir, config };
+	}
+
+	function requireOpenTeam(config: TeamConfig, action: string, caller?: string): void {
+		if (config.closed || config.closing) {
+			throw new Error(`Team '${config.name}' is ${config.closed ? "closed" : "closing"}; cannot ${action}.`);
+		}
+		if (caller && caller !== LEAD) {
+			const member = config.members.find((candidate) => candidate.name === caller);
+			if (!member || member.status !== "running") {
+				throw new Error(`Teammate '${caller}' is ${member?.status ?? "unregistered"}; cannot ${action}.`);
+			}
+		}
 	}
 
 	/** Resolve this child session's team membership from its run id, with a
 	 * short retry: the lead writes the runId into the team config after the
 	 * spawn RPC reply, which can land after this process started. */
 	async function findOwnIdentity(): Promise<MemberIdentity | null> {
-		const runId = process.env[RUN_ID_ENV]?.trim();
+		const runId = options.runId?.trim() || process.env[RUN_ID_ENV]?.trim();
 		if (!runId) return null;
 		for (let attempt = 0; attempt < 8; attempt++) {
 			const found = findMemberByRunId(runId);
@@ -128,30 +163,31 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		return null;
 	}
 
-	/** Who is calling: the lead (active team) or a teammate (run-id lookup). */
+	/** Who is calling: the registered lead or a teammate authenticated by run id.
+	 * Optional identity fields are assertions only and can never select a caller. */
 	async function resolveCaller(identity?: { team?: string; member?: string }): Promise<{ team: string; dir: string; member: string; config: TeamConfig }> {
 		if (!isChildSession) {
 			const { name, dir, config } = activeTeamDir(identity?.team);
+			if (identity?.member && identity.member !== LEAD) {
+				throw new Error(`Lead identity assertion must be '${LEAD}', not '${identity.member}'.`);
+			}
 			return { team: name, dir, member: LEAD, config };
 		}
-		// Child session: explicit overrides win, then run-id resolution.
-		if (identity?.team && identity?.member) {
-			const dir = teamDir(identity.team);
-			const config = loadConfig(dir);
-			if (!config.members.some((m) => m.name === identity.member)) {
-				throw new Error(`Member '${identity.member}' is not on team '${identity.team}'.`);
-			}
-			return { team: identity.team, dir, member: identity.member, config };
-		}
 		const found = await findOwnIdentity();
-		if (found) {
-			const config = loadConfig(found.dir);
-			return { team: found.team, dir: found.dir, member: found.member.name, config };
+		if (!found) {
+			throw new Error("This child session is not a registered team teammate: PI_SUBAGENT_RUN_ID does not match any team member.");
 		}
-		throw new Error(
-			"This session is not a registered team teammate (no matching run id). "
-			+ "If you were spawned as a teammate, pass the team and member parameters explicitly.",
-		);
+		if (found.member.name === LEAD || found.member.name === "all") {
+			throw new Error(`Reserved legacy member '${found.member.name}' cannot authenticate as a teammate.`);
+		}
+		if (identity?.team && identity.team !== found.team) {
+			throw new Error(`Team assertion '${identity.team}' does not match the run-id identity '${found.team}/${found.member.name}'.`);
+		}
+		if (identity?.member && identity.member !== found.member.name) {
+			throw new Error(`Member assertion '${identity.member}' does not match the run-id identity '${found.team}/${found.member.name}'.`);
+		}
+		const config = loadConfig(found.dir);
+		return { team: found.team, dir: found.dir, member: found.member.name, config };
 	}
 
 	function inject(textBody: string): void {
@@ -218,7 +254,8 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 				if (config.closed) return stopPoller();
 				// Reconcile member statuses against pi-subagents' documented
 				// lifecycle artifacts (safety net for the event fast path).
-				reconcileRunningMembers(dir, config);
+				reconcileActiveMembers(dir, config);
+				if (!state.activeTeam) return;
 				// Throttled, capped mail delivery so chatty teammates cannot
 				// force a lead model turn every poll tick.
 				const now = Date.now();
@@ -269,7 +306,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 	}
 
 	/** Read a run's state from pi-subagents' documented status/result JSON artifacts. */
-	function readRunState(runId: string): { state: string; summary: string } | null {
+	function readRunState(runId: string): { state: string; summary: string; confirmedTerminal: boolean } | null {
 		try {
 			const { statusFile, resultFile } = findRunArtifacts(runId);
 			if (resultFile) {
@@ -280,7 +317,11 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 						? (result.results[0] as Record<string, unknown>)
 						: result;
 					const runState = String(first.status ?? first.state ?? result.status ?? result.state ?? "complete");
-					return { state: runState, summary: String(first.summary ?? result.summary ?? "").trim() };
+					return {
+						state: runState,
+						summary: String(first.summary ?? result.summary ?? "").trim(),
+						confirmedTerminal: isConfirmedTerminalRunArtifact(runState, true),
+					};
 				} catch {
 					// Fall through to the status file.
 				}
@@ -288,7 +329,12 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			if (statusFile) {
 				const status = JSON.parse(fs.readFileSync(statusFile, "utf8")) as Record<string, unknown>;
 				const steps = Array.isArray(status.steps) ? (status.steps as Array<Record<string, unknown>>) : [];
-				return { state: String(status.state ?? ""), summary: String(steps[0]?.summary ?? "").trim() };
+				const runState = String(status.state ?? "");
+				return {
+					state: runState,
+					summary: String(steps[0]?.summary ?? "").trim(),
+					confirmedTerminal: isConfirmedTerminalRunArtifact(runState, false, status.endedAt),
+				};
 			}
 			return null;
 		} catch {
@@ -296,17 +342,31 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		}
 	}
 
+	function finalizeClosingTeam(dir: string): void {
+		const finalized = updateConfig(dir, (cfg) => {
+			if (!cfg.closing || cfg.members.some((member) => isActiveMemberStatus(member.status))) return null;
+			cfg.closing = false;
+			cfg.closed = true;
+			return cfg.name;
+		});
+		if (!finalized || state.activeTeam !== finalized) return;
+		state.activeTeam = undefined;
+		stopPoller();
+		pi.appendEntry(ACTIVE_ENTRY, { team: null });
+	}
+
 	/** Record a teammate's terminal state exactly once and notify the lead. */
 	function recordCompletion(dir: string, runId: string, status: TeamMember["status"], summary: string): void {
 		options.writerCoordinator?.releaseRun(runId);
 		const memberName = updateConfig(dir, (cfg) => {
 			const target = cfg.members.find((m) => m.runId === runId);
-			if (!target || target.status !== "running") return null; // Already recorded.
+			if (!target || !isActiveMemberStatus(target.status)) return null; // Already recorded.
 			target.status = status;
 			target.endedAt = Date.now();
 			target.lastSummary = summary || undefined;
 			return target.name;
 		});
+		finalizeClosingTeam(dir);
 		if (!memberName) return;
 		const icon = status === "idle" ? "✅" : status === "failed" ? "❌" : "⏹️";
 		inject([
@@ -318,20 +378,20 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 	}
 
 	/** Poll documented run artifacts for teammates whose completion event was missed. */
-	function reconcileRunningMembers(dir: string, config: TeamConfig): void {
+	function reconcileActiveMembers(dir: string, config: TeamConfig): void {
 		for (const member of config.members) {
-			if (member.status !== "running" || !member.runId) continue;
+			if (!isActiveMemberStatus(member.status) || !member.runId) continue;
 			const runState = readRunState(member.runId);
 			if (!runState) {
-				// No artifacts at all: the run was lost (crash before artifact write,
-				// or temp cleanup after a reboot). Self-heal after a generous grace
-				// period so the member name never becomes a permanent dead-end.
-				if (Date.now() - member.spawnedAt > LOST_RUN_GRACE_MS) {
+				// A never-stopped running process with missing artifacts is treated as
+				// lost after a generous grace period. A stop-acknowledged process stays
+				// nonterminal until an authoritative completion artifact arrives.
+				if (member.status === "running" && Date.now() - member.spawnedAt > LOST_RUN_GRACE_MS) {
 					recordCompletion(dir, member.runId, "failed", "Run artifacts are missing (process lost or temp dir cleaned); marked failed by the reconciler. Respawn to continue.");
 				}
 				continue;
 			}
-			if (!TERMINAL_RUN_STATES.has(runState.state)) continue;
+			if (!runState.confirmedTerminal) continue;
 			recordCompletion(dir, member.runId, mapTerminalStatus(runState.state), runState.summary.slice(0, SUMMARY_MAX));
 		}
 	}
@@ -383,7 +443,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			"",
 			"## Team protocol",
 			"- You are an independent teammate, not a report-back subagent. Coordinate with the lead and peers through team tools.",
-			"- Your identity resolves automatically. If a team tool asks for it, your team is `" + input.team + "` and your member name is `" + input.member + "`.",
+			"- Your identity is authenticated automatically from PI_SUBAGENT_RUN_ID. Omit team/member assertions unless diagnosing a mismatch; assertions can never change your identity.",
 			"- Start by calling team_inbox() and team_tasks({action:\"list\"}) to see messages and available work.",
 			"- Claim work with team_tasks({action:\"claim\", id}) or team_tasks({action:\"next\"}); complete it with team_tasks({action:\"complete\", id}).",
 			"- Message the lead with team_send({to:\"lead\", message}) and peers with team_send({to:\"<member>\", message}). Broadcast with to:\"all\".",
@@ -405,16 +465,19 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		signal?: AbortSignal,
 	): Promise<Record<string, unknown>> {
 		const { name: team, dir, config } = activeTeamDir();
-		if (config.closed) throw new Error(`Team '${team}' is disbanded. Create a new team.`);
-		const memberName = sanitizeName(input.name);
+		requireOpenTeam(config, "spawn a teammate", LEAD);
+		const memberName = sanitizeMemberName(input.name);
 		const agent = input.agent?.trim() || TEAMMATE_AGENT;
 		const existing = config.members.find((m) => m.name === memberName);
-		if (existing?.status === "running") {
-			throw new Error(`Teammate '${memberName}' is already running. Wait for it to finish, team_stop it, or team_send it mail.`);
+		if (existing && isActiveMemberStatus(existing.status)) {
+			throw new Error(`Teammate '${memberName}' is ${existing.status}. Wait for terminal completion before respawning it.`);
 		}
 		const respawn = Boolean(existing);
 		const writeCapable = resolveTeamAgentCapability(agent, input.write) === "writer";
-		const writerLease = writeCapable ? options.writerCoordinator?.acquire(ctx.cwd, `team:${team}/${memberName}`) : undefined;
+		if (writeCapable && !options.writerCoordinator) {
+			throw new Error("Write-capable Agent Teams spawning requires the shared Workbench writer coordinator.");
+		}
+		const writerLease = writeCapable ? options.writerCoordinator!.acquire(ctx.cwd, `team:${team}/${memberName}`) : undefined;
 		const prompt = buildTeammatePrompt({ team, dir, member: memberName, role: input.role, task: input.task, respawn });
 
 		const ping = await requireRpc().request("ping", {}, signal).catch((error) => {
@@ -443,10 +506,13 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			throw new Error(`Spawn failed: ${reply.error?.message ?? "unknown RPC error"}`);
 		}
 		const runId = runIdFromSpawnReply(reply);
-		if (writerLease) {
-			if (runId) options.writerCoordinator?.attachRun(writerLease.token, runId);
-			else options.writerCoordinator?.markUncertain(writerLease.token);
+		if (!runId) {
+			options.writerCoordinator?.markUncertain(writerLease?.token);
+			throw new Error(
+				"Spawn was accepted without a run id. Refusing to register an unauthenticated teammate; inspect the pi-subagents fleet before releasing any retained writer lease.",
+			);
 		}
+		if (writerLease) options.writerCoordinator?.attachRun(writerLease.token, runId);
 		const now = Date.now();
 		updateConfig(dir, (cfg) => {
 			const member = cfg.members.find((m) => m.name === memberName);
@@ -479,11 +545,10 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		return {
 			team,
 			member: memberName,
-			runId: runId ?? null,
+			runId,
 			respawn,
 			status: "running",
 			writeCapable,
-			...(runId ? {} : { warning: "Spawn accepted but no run id was returned; teammate identity will rely on explicit team/member parameters and any writer lease remains uncertain." }),
 			hint: `Teammate '${memberName}' launched in the background. You will be notified on completion; mail arrives automatically.`,
 		};
 	}
@@ -493,8 +558,8 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 	// -----------------------------------------------------------------------
 
 	const IdentityParams = {
-		team: Type.Optional(Type.String({ description: "Team name override (teammates only; lead uses the active team)." })),
-		member: Type.Optional(Type.String({ description: "Member name override (teammates only)." })),
+		team: Type.Optional(Type.String({ description: "Optional team identity assertion. It must match the active lead team or the caller's run-id identity." })),
+		member: Type.Optional(Type.String({ description: "Optional caller identity assertion. It must match 'lead' or the caller's run-id identity." })),
 	};
 
 	pi.registerTool({
@@ -510,6 +575,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		async execute(_id, params) {
 			const caller = await resolveCaller(params);
 			const config = caller.config;
+			requireOpenTeam(config, "send team mail", caller.member);
 			const to = params.to.trim();
 			if (to !== LEAD && to !== "all" && !config.members.some((m) => m.name === to)) {
 				throw new Error(`Unknown recipient '${to}'. Members: ${config.members.map((m) => m.name).join(", ") || "(none)"}, lead, all.`);
@@ -533,7 +599,9 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		}),
 		async execute(_id, params) {
 			const caller = await resolveCaller(params);
-			const messages = readInbox(caller.dir, caller.member, params.markRead ?? true);
+			const markRead = params.markRead ?? true;
+			if (markRead) requireOpenTeam(caller.config, "advance the inbox cursor", caller.member);
+			const messages = readInbox(caller.dir, caller.member, markRead);
 			if (messages.length === 0) return text(`No new mail for ${caller.member}.`);
 			return text({
 				unread: messages.length,
@@ -558,6 +626,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		}),
 		async execute(_id, params) {
 			const caller = await resolveCaller(params);
+			if (params.action !== "list") requireOpenTeam(caller.config, `perform task action '${params.action}'`, caller.member);
 			switch (params.action) {
 				case "create": {
 					if (!params.title) throw new Error("team_tasks create requires title.");
@@ -602,7 +671,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 				spawns: m.spawns,
 				lastSummary: m.lastSummary,
 			}));
-			return text({ team: caller.team, goal: caller.config.goal, closed: caller.config.closed, you: caller.member, members });
+			return text({ team: caller.team, goal: caller.config.goal, closing: caller.config.closing ?? false, closed: caller.config.closed, you: caller.member, members });
 		},
 	});
 
@@ -620,6 +689,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			return text({
 				team: caller.team,
 				goal: caller.config.goal,
+				closing: caller.config.closing ?? false,
 				closed: caller.config.closed,
 				you: caller.member,
 				members: caller.config.members.map((m) => ({ name: m.name, role: m.role, status: m.status, spawns: m.spawns })),
@@ -637,24 +707,63 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		parameters: Type.Object({
 			action: StringEnum(["read", "append"] as const),
 			content: Type.Optional(Type.String({ description: "Note content (required for append)." })),
-			...IdentityParams,
-			member: Type.Optional(Type.String({ description: "Whose notes (default: yourself)." })),
+			team: IdentityParams.team,
+			member: Type.Optional(Type.String({ description: "Whose notes to access (default: yourself). Must be 'lead' or an exact roster member name." })),
 		}),
 		async execute(_id, params) {
-			const caller = await resolveCaller(params);
+			const caller = await resolveCaller({ team: params.team });
 			const target = params.member ?? caller.member;
+			if (target !== LEAD && !caller.config.members.some((member) => member.name === target)) {
+				throw new Error(`Unknown notes target '${target}'. Use '${LEAD}' or an exact roster member name.`);
+			}
 			if (params.action === "append") {
+				requireOpenTeam(caller.config, "append team notes", caller.member);
 				if (target !== caller.member && caller.member !== LEAD) {
 					throw new Error("Teammates can only append to their own notes.");
 				}
 				if (!params.content?.trim()) throw new Error("team_notes append requires content.");
-				appendNote(caller.dir, target, params.content);
+				appendNote(caller.dir, target, params.content, caller.member);
 				return text(`Note appended to ${target}.`);
 			}
 			const notes = readNotes(caller.dir, target);
 			return text(notes ? { member: target, notes } : `No notes for ${target} yet.`);
 		},
 	});
+
+	interface StopOutcome {
+		member: string;
+		accepted: boolean;
+		status: TeamMember["status"];
+		error?: string;
+	}
+
+	async function requestMemberStop(dir: string, requested: TeamMember): Promise<StopOutcome> {
+		const current = loadConfig(dir).members.find((member) => member.name === requested.name);
+		if (!current) return { member: requested.name, accepted: false, status: requested.status, error: "member no longer exists" };
+		if (current.status === "stopping") return { member: current.name, accepted: true, status: current.status };
+		if (current.status !== "running") return { member: current.name, accepted: true, status: current.status };
+		if (!current.runId) return { member: current.name, accepted: false, status: current.status, error: "running member has no run id" };
+
+		const reply = await requireRpc().request("stop", { id: current.runId }).catch((error) => ({
+			success: false as const,
+			error: { message: error instanceof Error ? error.message : String(error) },
+		}));
+		if (!reply.success) {
+			return {
+				member: current.name,
+				accepted: false,
+				status: loadConfig(dir).members.find((member) => member.name === current.name)?.status ?? current.status,
+				error: (reply as { error?: { message?: string } }).error?.message ?? "stop request failed",
+			};
+		}
+
+		const status = updateConfig(dir, (cfg) => {
+			const target = cfg.members.find((member) => member.name === current.name);
+			if (target && target.runId === current.runId && target.status === "running") target.status = "stopping";
+			return target?.status ?? current.status;
+		});
+		return { member: current.name, accepted: true, status };
+	}
 
 	// -----------------------------------------------------------------------
 	// Lead-only tools, command, and listeners
@@ -666,18 +775,43 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			label: "Team Create",
 			description: "Create an agent team for this session and set it active. One team per session. Spawn 2-5 teammates with clearly separated ownership; use pi-subagents instead for simple report-back delegation.",
 			promptSnippet: "Create an agent team for coordinated parallel work",
+			executionMode: "sequential",
 			parameters: Type.Object({
 				goal: Type.String({ description: "What the team should achieve." }),
 				name: Type.Optional(Type.String({ description: "Team name (a-z, 0-9, '-'). Default: session-derived." })),
 			}),
 			async execute(_id, params, _signal, _onUpdate, ctx) {
+				const sessionId = ctx.sessionManager.getSessionId();
+				if (!sessionId?.trim()) throw new Error("Agent Teams requires a persistent Pi session id before a team can be created.");
+				if (state.currentSessionId && state.currentSessionId !== sessionId) {
+					throw new Error("Agent Teams session state is stale after a session switch; reload before creating a team.");
+				}
+				state.currentSessionId = sessionId;
+				if (state.activeTeam) {
+					const active = activeTeamDir();
+					if (!active.config.closed) {
+						throw new Error(`Session '${sessionId}' already owns active team '${active.name}'. Disband it before creating another team.`);
+					}
+					state.activeTeam = undefined;
+				}
+				const otherOpenTeam = listTeamNames().find((candidate) => {
+					try {
+						const config = loadConfig(teamDir(candidate));
+						return config.leadSessionId === sessionId && !config.closed;
+					} catch {
+						return false;
+					}
+				});
+				if (otherOpenTeam) {
+					throw new Error(`Session '${sessionId}' already owns open team '${otherOpenTeam}' on another branch. Return to that branch and disband it first.`);
+				}
 				const base = params.name
 					? sanitizeName(params.name)
-					: `session-${(ctx.sessionManager.getSessionId() ?? `${Date.now().toString(36)}`).slice(0, 8)}`;
+					: `session-${sessionId.slice(0, 8)}`;
 				let name = base;
 				for (let i = 2; ; i++) {
 					try {
-						createTeam(name, params.goal, ctx.sessionManager.getSessionId() ?? undefined);
+						createTeam(name, params.goal, sessionId);
 						break;
 					} catch (error) {
 						if (params.name || !String(error).includes("already exists")) throw error;
@@ -700,13 +834,14 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			label: "Team Spawn",
 			description: "Spawn (or respawn) a teammate as an independent async Pi session on the active team. The teammate works autonomously, claims shared tasks, and messages peers directly. You are notified when it finishes; its mail arrives automatically.",
 			promptSnippet: "Spawn an independent teammate onto the team",
+			executionMode: "sequential",
 			parameters: Type.Object({
 				name: Type.String({ description: "Member name (a-z, 0-9, '-'), e.g. 'researcher', 'frontend'." }),
 				role: Type.String({ description: "One-line role, e.g. 'Owns API research; no file edits'." }),
 				task: Type.String({ description: "Full initial briefing: goal, ownership boundaries, deliverables." }),
 				model: Type.Optional(Type.String({ description: "Optional model override for this teammate." })),
 				agent: Type.Optional(Type.String({ description: "Subagent definition to run as. Default pi-agent-teams.teammate (writer); pi-agent-teams.scout is a packaged read-only researcher. Custom agents must include the team_* tools in their allowlist or omit tools." })),
-				write: Type.Optional(Type.Boolean({ description: "Capability declaration for an unknown custom agent (defaults true). Packaged roles use fixed policy: choose pi-agent-teams.scout for read-only or pi-agent-teams.teammate for writer. Workbench permits only one writer per cwd." })),
+				write: Type.Optional(Type.Boolean({ description: "Compatibility assertion only. Unknown custom agents always fail closed as writers and cannot use false; packaged roles must match their registered policy. Workbench permits one writer per Git worktree." })),
 			}),
 			async execute(_id, params, signal, _onUpdate, ctx) {
 				return text(await spawnTeammate(ctx, params, signal));
@@ -716,69 +851,76 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		pi.registerTool({
 			name: "team_stop",
 			label: "Team Stop",
-			description: "Stop a running teammate (or all running teammates when member is omitted). Stopped teammates keep their notes and can be respawned.",
+			description: "Request that a running teammate stop (or all active teammates when member is omitted). Acknowledged requests remain nonterminal until completion is confirmed.",
 			promptSnippet: "Stop a running teammate",
+			executionMode: "sequential",
 			parameters: Type.Object({
-				member: Type.Optional(Type.String({ description: "Member name; omit to stop all running teammates." })),
+				member: Type.Optional(Type.String({ description: "Member name; omit to stop all active teammates." })),
 			}),
 			async execute(_id, params) {
 				const { dir, config } = activeTeamDir();
-				const targets = params.member
-					? config.members.filter((m) => m.name === sanitizeName(params.member!))
-					: config.members.filter((m) => m.status === "running");
-				if (targets.length === 0) return text(params.member ? `No member named '${params.member}'.` : "No running teammates.");
-				const results: Array<Record<string, unknown>> = [];
-				for (const member of targets) {
-					if (member.status !== "running" || !member.runId) {
-						results.push({ member: member.name, stopped: false, reason: `status is ${member.status}` });
-						continue;
-					}
-					const reply = await requireRpc().request("stop", { id: member.runId }).catch((error) => ({ success: false as const, error: { message: error instanceof Error ? error.message : String(error) } }));
-					// Mark stopped even when the RPC fails: if pi-subagents no longer
-					// knows the run (restart, temp cleanup), leaving the member
-					// "running" would block respawning that name forever.
-					updateConfig(dir, (cfg) => {
-						const target = cfg.members.find((m) => m.name === member.name);
-						if (target) {
-							target.status = "stopped";
-							target.endedAt = Date.now();
-						}
-					});
-					results.push({
-						member: member.name,
-						stopped: true,
-						...(reply.success ? {} : { note: `RPC stop failed (${(reply as { error?: { message?: string } }).error?.message ?? "unknown"}); member marked stopped locally so it can be respawned.` }),
-					});
-				}
-				return text({ results });
+				const memberName = params.member ? sanitizeMemberName(params.member) : undefined;
+				const targets = memberName
+					? config.members.filter((member) => member.name === memberName)
+					: config.members.filter((member) => isActiveMemberStatus(member.status));
+				if (targets.length === 0) return text(params.member ? `No member named '${params.member}'.` : "No active teammates.");
+				const results: StopOutcome[] = [];
+				for (const member of targets) results.push(await requestMemberStop(dir, member));
+				return text({
+					results: results.map((result) => ({
+						member: result.member,
+						stopRequested: result.accepted && result.status === "stopping",
+						terminal: !isActiveMemberStatus(result.status),
+						status: result.status,
+						...(result.error ? { error: result.error } : {}),
+					})),
+				});
 			},
 		});
 
 		pi.registerTool({
 			name: "team_disband",
 			label: "Team Disband",
-			description: "Stop all running teammates and close the active team. Team files (tasks, mail, notes) are kept on disk.",
+			description: "Request all active teammates stop, block further mutations, and close the team only after terminal completion is confirmed. Team files are retained.",
 			promptSnippet: "Shut down and close the team",
+			executionMode: "sequential",
 			parameters: Type.Object({}),
 			async execute() {
 				const { name, dir, config } = activeTeamDir();
-				const stopped: string[] = [];
-				for (const member of config.members.filter((m) => m.status === "running" && m.runId)) {
-					const reply = await requireRpc().request("stop", { id: member.runId! });
-					if (reply.success) stopped.push(member.name);
+				if (config.closed) return text({ team: name, closed: true, keptAt: dir });
+				const results: StopOutcome[] = [];
+				for (const member of config.members.filter((candidate) => isActiveMemberStatus(candidate.status))) {
+					results.push(await requestMemberStop(dir, member));
 				}
-				updateConfig(dir, (cfg) => {
-					cfg.closed = true;
-					for (const m of cfg.members) {
-						if (m.status === "running") {
-							m.status = "stopped";
-							m.endedAt = Date.now();
-						}
+				const failures = results.filter((result) => !result.accepted);
+				if (failures.length > 0) {
+					return text({
+						team: name,
+						closed: false,
+						closing: false,
+						results,
+						retry: "One or more stop requests were not acknowledged. The team remains open and active members remain non-respawnable.",
+					});
+				}
+
+				const transition = updateConfig(dir, (cfg) => {
+					if (cfg.members.some((member) => member.status === "running")) return { closed: false, closing: false };
+					if (cfg.members.some((member) => member.status === "stopping")) {
+						cfg.closing = true;
+						return { closed: false, closing: true };
 					}
+					cfg.closing = false;
+					cfg.closed = true;
+					return { closed: true, closing: false };
 				});
-				stopPoller();
-				pi.appendEntry(ACTIVE_ENTRY, { team: null });
-				return text({ team: name, closed: true, stoppedMembers: stopped, keptAt: dir });
+				if (transition.closed) {
+					state.activeTeam = undefined;
+					stopPoller();
+					pi.appendEntry(ACTIVE_ENTRY, { team: null });
+				} else {
+					startPoller();
+				}
+				return text({ team: name, ...transition, results, keptAt: dir });
 			},
 		});
 
@@ -793,8 +935,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 
 		function dashboard(): string {
 			if (!state.activeTeam) return "No active team. Create one: /team new <goal> — or ask the agent to use team_create.";
-			const dir = teamDir(state.activeTeam);
-			const config = loadConfig(dir);
+			const { dir, config } = activeTeamDir();
 			const tasks = decorateTasks(listTasks(dir));
 			const counts = {
 				pending: tasks.filter((t) => t.status === "pending").length,
@@ -825,12 +966,23 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 					const tail = rest.join(" ");
 					if (verb === "new") {
 						if (!tail) return out(ctx, "Usage: /team new <goal>");
+						const sessionId = ctx.sessionManager.getSessionId();
+						if (!sessionId?.trim()) throw new Error("Agent Teams requires a persistent Pi session id before a team can be created.");
+						if (state.currentSessionId && state.currentSessionId !== sessionId) {
+							throw new Error("Agent Teams session state is stale after a session switch; reload before creating a team.");
+						}
+						state.currentSessionId = sessionId;
+						if (state.activeTeam) {
+							const active = activeTeamDir();
+							if (!active.config.closed) throw new Error(`Session '${sessionId}' already owns active team '${active.name}'.`);
+							state.activeTeam = undefined;
+						}
 						const goal = tail;
-						const base = `session-${(ctx.sessionManager.getSessionId() ?? `${Date.now().toString(36)}`).slice(0, 8)}`;
+						const base = `session-${sessionId.slice(0, 8)}`;
 						let name = base;
 						for (let i = 2; ; i++) {
 							try {
-								createTeam(name, goal, ctx.sessionManager.getSessionId() ?? undefined);
+								createTeam(name, goal, sessionId);
 								break;
 							} catch (error) {
 								if (!String(error).includes("already exists")) throw error;
@@ -868,33 +1020,40 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 					if (verb === "stop") {
 						if (!tail) return out(ctx, "Usage: /team stop <member>");
 						const { dir, config } = activeTeamDir();
-						const member = config.members.find((m) => m.name === sanitizeName(tail));
+						const member = config.members.find((candidate) => candidate.name === sanitizeMemberName(tail));
 						if (!member) return out(ctx, `No member named '${tail}'.`);
-						if (member.status !== "running" || !member.runId) return out(ctx, `'${tail}' is ${member.status}.`);
-						const reply = await requireRpc().request("stop", { id: member.runId }).catch((error) => ({ success: false as const, error: { message: error instanceof Error ? error.message : String(error) } }));
-						updateConfig(dir, (cfg) => {
-							const target = cfg.members.find((m) => m.name === member.name);
-							if (target) {
-								target.status = "stopped";
-								target.endedAt = Date.now();
-							}
-						});
-						return out(ctx, reply.success
-							? `Stop requested for '${tail}'.`
-							: `RPC stop failed (${(reply as { error?: { message?: string } }).error?.message ?? "unknown"}); '${tail}' marked stopped locally so it can be respawned.`);
+						const result = await requestMemberStop(dir, member);
+						if (!result.accepted) return out(ctx, `Stop request for '${tail}' failed: ${result.error ?? "unknown error"}.`);
+						return out(ctx, result.status === "stopping" ? `Stop requested for '${tail}'; awaiting terminal completion.` : `'${tail}' is already ${result.status}.`);
 					}
 					if (verb === "disband") {
 						const { dir, config } = activeTeamDir();
-						for (const member of config.members.filter((m) => m.status === "running" && m.runId)) {
-							await requireRpc().request("stop", { id: member.runId! }).catch(() => undefined);
+						const results: StopOutcome[] = [];
+						for (const member of config.members.filter((candidate) => isActiveMemberStatus(candidate.status))) {
+							results.push(await requestMemberStop(dir, member));
 						}
-						updateConfig(dir, (cfg) => {
+						const failures = results.filter((result) => !result.accepted);
+						if (failures.length > 0) {
+							return out(ctx, `Team '${config.name}' remains open; stop failed for ${failures.map((result) => result.member).join(", ")}.`);
+						}
+						const transition = updateConfig(dir, (cfg) => {
+							if (cfg.members.some((member) => member.status === "running")) return { closed: false, closing: false };
+							if (cfg.members.some((member) => member.status === "stopping")) {
+								cfg.closing = true;
+								return { closed: false, closing: true };
+							}
+							cfg.closing = false;
 							cfg.closed = true;
-							for (const m of cfg.members) if (m.status === "running") m.status = "stopped";
+							return { closed: true, closing: false };
 						});
-						stopPoller();
-						pi.appendEntry(ACTIVE_ENTRY, { team: null });
-						return out(ctx, `Team '${config.name}' disbanded. Files kept at ${dir}.`);
+						if (transition.closed) {
+							state.activeTeam = undefined;
+							stopPoller();
+							pi.appendEntry(ACTIVE_ENTRY, { team: null });
+							return out(ctx, `Team '${config.name}' disbanded. Files kept at ${dir}.`);
+						}
+						startPoller();
+						return out(ctx, `Team '${config.name}' is closing; awaiting terminal teammate completion.`);
 					}
 					return out(ctx, `Unknown subcommand '${verb}'. Try /team, /team new, /team spawn, /team say, /team tasks, /team stop, /team disband.`);
 				} catch (error) {
@@ -907,23 +1066,45 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 		// Session lifecycle (lead only)
 		// -------------------------------------------------------------------
 
-		events.on(ASYNC_COMPLETE_EVENT, (payload: unknown) => {
+		const unsubscribeCompletion = events.on(ASYNC_COMPLETE_EVENT, (payload: unknown) => {
 			handleAsyncComplete(payload);
 		});
 
-		pi.on("session_start", async (_event, ctx) => {
+		function restoreActiveTeam(ctx: ExtensionContext): void {
+			stopPoller();
+			state.currentSessionId = ctx.sessionManager.getSessionId();
 			state.activeTeam = undefined;
-			for (const entry of ctx.sessionManager.getEntries()) {
+			let candidate: string | undefined;
+			for (const entry of ctx.sessionManager.getBranch()) {
 				if (entry.type === "custom" && entry.customType === ACTIVE_ENTRY) {
 					const team = (entry.data as { team?: string | null } | undefined)?.team;
-					state.activeTeam = team || undefined;
+					candidate = team || undefined;
 				}
 			}
-			if (state.activeTeam) startPoller();
+			if (!candidate || !state.currentSessionId) return;
+			try {
+				const config = loadConfig(teamDir(candidate));
+				if (config.leadSessionId !== state.currentSessionId || config.closed) return;
+				state.activeTeam = candidate;
+				startPoller();
+			} catch {
+				// Invalid, missing, foreign, and legacy ownerless teams fail closed.
+			}
+		}
+
+		pi.on("session_start", async (_event, ctx) => {
+			restoreActiveTeam(ctx);
+		});
+
+		pi.on("session_tree", async (_event, ctx) => {
+			restoreActiveTeam(ctx);
 		});
 
 		pi.on("session_shutdown", async () => {
 			stopPoller();
+			state.activeTeam = undefined;
+			state.currentSessionId = undefined;
+			if (typeof unsubscribeCompletion === "function") unsubscribeCompletion();
 			state.rpc = null;
 		});
 	}
@@ -939,7 +1120,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 			// never delays startup for ordinary children (reviewers, one-off runs).
 			void (async () => {
 				const identity = await findOwnIdentity();
-				if (!identity || state.poller || state.sessionEnded) return;
+				if (!identity || identity.member.name === LEAD || identity.member.name === "all" || state.poller || state.sessionEnded) return;
 				const memberName = identity.member.name;
 				const dir = identity.dir;
 				state.poller = setInterval(() => {

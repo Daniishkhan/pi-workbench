@@ -17,11 +17,12 @@ test("keeps workflow-only roles out of one-off and team routing", () => {
 	assert.ok(Object.keys(ROLE_POLICIES).length >= 20);
 });
 
-test("prevents team callers from downgrading known writers while allowing explicit custom read-only roles", () => {
+test("prevents team callers from downgrading known or unknown writers", () => {
 	assert.equal(resolveTeamAgentCapability("pi-agent-teams.teammate"), "writer");
 	assert.equal(resolveTeamAgentCapability("pi-agent-teams.scout"), "read-only");
 	assert.throws(() => resolveTeamAgentCapability("pi-agent-teams.teammate", false), /cannot override packaged policy/);
 	assert.throws(() => resolveTeamAgentCapability("pi-workbench.worker", true), /not approved for the Agent Teams surface/);
-	assert.equal(resolveTeamAgentCapability("custom.read-only", false), "read-only");
+	assert.throws(() => resolveTeamAgentCapability("custom.read-only", false), /cannot self-declare as read-only/);
+	assert.equal(resolveTeamAgentCapability("custom.declared-writer", true), "writer");
 	assert.equal(resolveTeamAgentCapability("custom.undeclared"), "writer");
 });

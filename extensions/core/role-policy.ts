@@ -56,7 +56,14 @@ export function allowsSurface(runtimeName: string, surface: RoutingSurface): boo
 
 export function resolveTeamAgentCapability(runtimeName: string, declaredWrite?: boolean): AgentCapability {
 	const policy = rolePolicyForAgent(runtimeName);
-	if (!policy) return declaredWrite === false ? "read-only" : "writer";
+	if (!policy) {
+		if (declaredWrite === false) {
+			throw new Error(
+				`Unknown team agent '${runtimeName}' cannot self-declare as read-only. Register an administrator-owned team policy with an enforced mutation-free tool surface first.`,
+			);
+		}
+		return "writer";
+	}
 	if (!policy.surfaces.includes("team")) {
 		throw new Error(`Agent '${runtimeName}' is not approved for the Agent Teams surface.`);
 	}

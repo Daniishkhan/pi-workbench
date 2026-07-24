@@ -213,8 +213,9 @@ Result:
 Team safety behavior includes:
 
 - packaged role capability enforcement;
-- unknown custom agents defaulting to writers unless explicitly declared read-only;
-- one writer lease per canonical worktree;
+- unknown custom agents always failing closed as writers unless registered in administrator-owned policy;
+- one writer lease per canonical Git worktree, including nested-directory launches;
+- run-ID-authenticated teammate identity and session-bound lead ownership;
 - ownership checks for shared tasks;
 - dependency-aware task claiming;
 - bounded inboxes and cursor-based delivery;
