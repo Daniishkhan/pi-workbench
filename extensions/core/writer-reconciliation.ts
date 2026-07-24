@@ -1,24 +1,15 @@
+import { classifySubagentStatusText, type ReconciledRunState } from "./run-lifecycle.ts";
 import type { SubagentRpcClient } from "./subagent-rpc.ts";
 import type { WriterCoordinator, WriterLease } from "./writer-coordinator.ts";
 
-const TERMINAL_STATES = new Set(["complete", "completed", "failed", "stopped", "timed_out", "timeout"]);
-const ACTIVE_STATES = new Set(["queued", "running", "paused", "stopping"]);
-
-export type ReconciledRunState = "active" | "terminal" | "unknown";
+export { classifySubagentStatusText };
+export type { ReconciledRunState };
 
 export interface WriterReconciliationResult {
 	checked: number;
 	active: number;
 	released: number;
 	uncertain: number;
-}
-
-export function classifySubagentStatusText(text: string | undefined): ReconciledRunState {
-	const state = /^State:\s*([^\s]+)\s*$/im.exec(text ?? "")?.[1]?.toLowerCase();
-	if (!state) return "unknown";
-	if (TERMINAL_STATES.has(state)) return "terminal";
-	if (ACTIVE_STATES.has(state)) return "active";
-	return "unknown";
 }
 
 async function reconcileLease(

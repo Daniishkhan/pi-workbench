@@ -22,7 +22,14 @@ export const WORKBENCH_MODES = [
 
 export type WorkbenchMode = typeof WORKBENCH_MODES[number];
 
-export const SHIPYARD_MODES = new Set<WorkbenchMode>(["explore", "debug", "fast", "review", "security", "ui", "compact", "deliver", "ship"]);
+/** Canonical Shipyard workflow names. The executable definitions (chain file,
+ * timeout, findings, mutating, default task) live in shipyard/workflow-catalog.ts. */
+export const SHIPYARD_WORKFLOW_NAMES = ["explore", "debug", "fast", "review", "security", "ui", "compact", "deliver", "ship"] as const;
+
+export type ShipyardWorkflowName = (typeof SHIPYARD_WORKFLOW_NAMES)[number];
+
+export const SHIPYARD_MODES: ReadonlySet<WorkbenchMode> = new Set<WorkbenchMode>(SHIPYARD_WORKFLOW_NAMES);
+
 export const ONE_OFF_AGENTS: Partial<Record<WorkbenchMode, string>> = {
 	quick: "pi-workbench.fast-scout",
 	deep: "pi-workbench.deep-reader",
@@ -45,10 +52,17 @@ export function resolveOneOffRoute(mode: WorkbenchMode, override?: string): OneO
 	return { agent, capability: capabilityForAgent(agent) };
 }
 
-export function routeCategory(mode: WorkbenchMode): "status" | "one-off" | "shipyard" | "team" | "dynamic" {
+export type RouteCategory = "status" | "one-off" | "shipyard" | "team" | "dynamic";
+
+export function routeCategory(mode: WorkbenchMode): RouteCategory {
 	if (mode === "status") return "status";
 	if (ONE_OFF_AGENTS[mode]) return "one-off";
 	if (SHIPYARD_MODES.has(mode)) return "shipyard";
 	if (mode === "team" || mode === "dynamic") return mode;
 	throw new Error(`Workbench mode '${mode}' has no routing category.`);
+}
+
+/** Narrow a routed shipyard mode to the canonical workflow name. */
+export function isShipyardMode(mode: WorkbenchMode): mode is ShipyardWorkflowName {
+	return SHIPYARD_MODES.has(mode);
 }

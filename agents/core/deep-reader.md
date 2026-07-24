@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 skills: shipyard-validation
+skillPath: ../../skills
 defaultContext: fresh
 acceptanceRole: read-only
 acceptance: {"level":"none","reason":"Read-only codebase investigation; only Workbench-owned context artifacts may be persisted."}

@@ -29,14 +29,15 @@ The former standalone Agent Teams, Dynamic Workflows, Shipyard, and top-level `p
 
 ### Final validation result
 
-- **121 automated tests passed**.
+- **118 automated tests passed**.
 - TypeScript type checking passed.
 - Package invariants and runtime provenance checks passed.
 - Workbench’s production dependency audit reported **0 vulnerabilities**.
 - Parent, child-session, default-disabled Dynamic, and opt-in Dynamic smoke tests passed.
 - `pi list` shows Workbench as the only orchestration package.
-- A local Git repository was initialized on the Desktop after explicit owner authorization.
-- No commit, push, publish, deployment, or remote was created.
+- A local Git repository was initialized and the reviewed v0.1 baseline was pushed to `github.com:Daniishkhan/pi-workbench` after explicit owner authorization.
+- The v0.2 front-door simplification documented here is currently an uncommitted local change.
+- No npm publication or deployment was performed.
 
 ---
 
@@ -265,7 +266,7 @@ The schema implementation now:
 - validates numeric, object, array, and additional-property constraints; and
 - excludes regex `pattern`, avoiding that ReDoS surface.
 
-### 8.3 Exact source review and saved-command isolation
+### 8.3 Exact source review and saved-definition reuse
 
 The reviewed source bytes are the bytes that execute.
 
@@ -279,7 +280,7 @@ The flow now:
 6. Acquires any writer lease from the compiled manifest, not mutable metadata.
 7. Executes the reviewed source.
 
-Saved slash commands use `resolveSaved()` and cannot be hijacked by a same-name session draft. Save operations also re-open, compile, restage, hash, and trust the exact reviewed source.
+Save operations re-open, compile, restage, hash, and trust the exact reviewed source. Saved definitions remain reusable through the Workbench dynamic route and `workflow_run`; they do not register direct slash commands.
 
 ### 8.4 Input, intermediate, aggregate, and final limits
 
@@ -387,7 +388,7 @@ Child smoke testing confirmed that child sessions do not expose:
 - Shipyard workflow launches;
 - Team spawning/disbanding;
 - Dynamic workflow creation/execution; or
-- Dynamic slash commands.
+- Workbench routing and Dynamic orchestration entry points.
 
 Leaf children retain only the scoped read/repository/findings or Team mailbox/task tools required by their role.
 
@@ -453,10 +454,10 @@ The standalone root runtime dependency was removed from `~/.pi/agent/npm/package
 
 ```text
 Core:       20 passed
-Shipyard:   37 passed
+Shipyard:   34 passed
 Teams:      13 passed
 Dynamic:    51 passed
-Total:     121 passed
+Total:     118 passed
 ```
 
 Command:
@@ -469,7 +470,7 @@ npm test
 ### Package validation
 
 ```text
-Validated 24 agents, 10 skills, 9 chains, 6 prompts,
+Validated 24 agents, 10 skills, 9 chains, 0 prompt-template commands,
 and shared orchestration invariants.
 ```
 
@@ -491,10 +492,10 @@ found 0 vulnerabilities
 ### Package dry-run
 
 ```text
-Package:       @danish/pi-workbench@0.1.0
-Files:         97
-Packed size:   127,894 bytes
-Unpacked size: 520,909 bytes
+Package:       @danish/pi-workbench@0.2.0
+Files:         91
+Packed size:   122,859 bytes
+Unpacked size: 501,994 bytes
 ```
 
 ### Discovery smoke test
@@ -508,20 +509,19 @@ Total isolated agents:    33
 Workbench chains:          9
 ```
 
-The actual user environment additionally retained four pre-existing custom user agents, producing 37 total discovered agents.
-
 ### Runtime surface smoke tests
 
 Default configuration:
 
-- `/workbench`, `/work`, `/shipyard`, `/team`, and `/subagents-doctor` registered successfully.
+- `/workbench`, `/work`, and `/subagents-doctor` registered successfully.
+- Legacy `/shipyard`, `/team`, `/workflow`, `/workflows`, and `/ultracode` commands were absent.
 - Dynamic commands and tools were absent.
 - No command collision was reported.
 
 Opt-in Dynamic configuration:
 
-- `/workflow`, `/workflows`, and `/ultracode` registered.
-- `workflow_create`, `workflow_run`, and `workflow_control` registered.
+- No additional slash commands registered.
+- `workflow_create`, `workflow_run`, and `workflow_control` registered as operational tools behind the Workbench dynamic route.
 - `skill:dynamic-workflows` registered.
 - Ephemeral pinned-agent package files were removed at session shutdown.
 
@@ -550,7 +550,7 @@ Activation link:
 /Users/danish/.pi/agent/packages/pi-workbench -> /Users/danish/Desktop/pi-workbench
 ```
 
-The repository is initialized on branch `main`. At the time of this report it has no commit and no remote.
+The repository is on branch `main` with remote `git@github.com:Daniishkhan/pi-workbench.git`. The initial v0.1 baseline commit is `ffd4d8a`; the v0.2 front-door simplification remains uncommitted pending separate shipping authorization.
 
 The prior directories under `~/.pi/agent/backups/` and the archived legacy scout backup were intentionally deleted on owner instruction. Therefore, there is no retained archive-based rollback to the former standalone packages. Reproducibility now depends on this checkout, its lockfile, and the immutable upstream runtime URL/integrity record.
 
@@ -590,11 +590,11 @@ The high advisory is in transitive package `fast-uri`; moderate advisories inclu
 
 **Recommendation:** review and upgrade the affected shared extensions in a separate controlled maintenance task.
 
-### 13.3 Repository has no baseline commit or remote
+### 13.3 v0.2 changes are not yet shipped
 
-A local Git repository now exists at `~/Desktop/pi-workbench`, but it has no commit, signed history, pull request, branch protection, or remote.
+The v0.1 baseline is committed and pushed. The v0.2 front-door simplification is validated locally but remains uncommitted and unpushed.
 
-**Recommendation:** after CTO review, authorize an initial baseline commit and private remote, then add CI for `npm test`, runtime verification, audit, and package dry-run.
+**Recommendation:** review this diff, then explicitly authorize its commit and push. Add CI for `npm test`, runtime verification, audit, and package dry-run.
 
 ### 13.4 Dynamic runtime leftovers after hard process termination
 
@@ -624,9 +624,9 @@ The durable writer guard covers Workbench-managed execution. A user can still by
 4. Review `extensions/core/role-policy.ts` for capability and surface decisions.
 5. Review `extensions/core/writer-coordinator.ts` and reconciliation tests.
 6. Review `extensions/dynamic/compiler.ts`, `schema.ts`, `delegation.ts`, `manager.ts`, `pinned-agents.ts`, and `index.ts`.
-7. Review Dynamic integration tests, especially cancellation/lease timing, exact-source execution, stale metadata, startup persistence, output limits, and saved-command isolation.
+7. Review Dynamic integration tests, especially cancellation/lease timing, exact-source execution, stale metadata, startup persistence, output limits, and saved-definition reuse.
 8. Run the validation commands below on a clean shell.
-9. Decide whether to authorize the initial commit, a private remote, and CI baseline.
+9. Decide whether to authorize the v0.2 commit/push and a CI baseline.
 10. Schedule separate remediation of the shared Pi npm advisories.
 
 Recommended commands:
@@ -645,13 +645,13 @@ PI_OFFLINE=1 pi list
 
 ## 15. Change authority and shipping boundary
 
-This work changed local files and settings and, after explicit owner authorization, initialized a local Git repository. It did **not**:
+The earlier v0.1 baseline was committed and pushed after explicit owner authorization. This v0.2 front-door change did **not**:
 
-- create a commit;
-- push to a remote;
+- create a new commit;
+- push the v0.2 diff;
 - publish an npm package;
 - deploy software;
-- create a remote repository; or
+- alter the configured remote; or
 - modify the upstream `pi-subagents` source.
 
 Those remaining actions require separate explicit authorization.

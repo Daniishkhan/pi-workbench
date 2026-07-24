@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerSubagents from "pi-subagents";
 import { loadWorkbenchConfig } from "./core/config.ts";
-import { SubagentRpcClient, type SubagentRpcEventBus } from "./core/subagent-rpc.ts";
+import { isChildSession } from "./core/env.ts";
+import { runIdFromAsyncComplete } from "./core/run-lifecycle.ts";
+import { SubagentRpcClient } from "./core/subagent-rpc.ts";
 import { WriterCoordinator } from "./core/writer-coordinator.ts";
 import { reconcileWriterLeases } from "./core/writer-reconciliation.ts";
 import registerDynamicWorkflows from "./dynamic/index.ts";
@@ -11,15 +13,8 @@ import registerRouter from "./router.ts";
 import registerShipyard, { type ShipyardService } from "./shipyard/index.ts";
 import registerTeams from "./teams/index.ts";
 
-const CHILD_ENV = "PI_SUBAGENT_CHILD";
 const SUBAGENTS_PACKAGE_ROOT = path.dirname(fileURLToPath(import.meta.resolve("pi-subagents")));
 const SUBAGENTS_SKILL = path.join(SUBAGENTS_PACKAGE_ROOT, "skills", "pi-subagents");
-
-function runIdFromCompletion(payload: unknown): string | undefined {
-	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-	const runId = (payload as Record<string, unknown>).runId;
-	return typeof runId === "string" && runId ? runId : undefined;
-}
 
 export default function piWorkbench(pi: ExtensionAPI): void {
 	// pi-subagents is an upstream dependency pinned by Workbench's lockfile.
@@ -29,8 +24,8 @@ export default function piWorkbench(pi: ExtensionAPI): void {
 
 	const config = loadWorkbenchConfig();
 	const writerCoordinator = new WriterCoordinator({ enabled: config.writerGuard.enabled });
-	const isChild = process.env[CHILD_ENV] === "1";
-	const rpc = isChild ? undefined : new SubagentRpcClient(pi.events as SubagentRpcEventBus, {
+	const isChild = isChildSession();
+	const rpc = isChild ? undefined : new SubagentRpcClient(pi.events, {
 		label: "Pi Workbench",
 		source: "@danish/pi-workbench",
 	});
@@ -56,7 +51,7 @@ export default function piWorkbench(pi: ExtensionAPI): void {
 		registerRouter(pi, { config, shipyard, writerCoordinator, rpc });
 
 		const unsubscribe = pi.events.on("subagent:async-complete", (payload) => {
-			const runId = runIdFromCompletion(payload);
+			const runId = runIdFromAsyncComplete(payload);
 			if (runId) writerCoordinator.releaseRun(runId);
 		});
 

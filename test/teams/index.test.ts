@@ -12,7 +12,8 @@ const teamsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-teams-index-te
 process.env.PI_AGENT_TEAMS_ROOT = teamsRoot;
 
 const store = await import("../../extensions/teams/store.ts");
-const { default: registerTeams, isConfirmedTerminalRunArtifact } = await import("../../extensions/teams/index.ts");
+const { isConfirmedTerminalRunArtifact } = await import("../../extensions/core/run-lifecycle.ts");
+const { default: registerTeams } = await import("../../extensions/teams/index.ts");
 
 after(() => fs.rmSync(teamsRoot, { recursive: true, force: true }));
 
@@ -37,11 +38,9 @@ class FakePi {
 	readonly events = new FakeBus();
 	readonly tools = new Map<string, ToolDefinition>();
 	readonly lifecycle = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
-	readonly commands = new Map<string, unknown>();
 	readonly entries: Array<{ type: string; data: unknown }> = [];
 	readonly messages: unknown[] = [];
 	registerTool(tool: ToolDefinition & { name: string }): void { this.tools.set(tool.name, tool); }
-	registerCommand(name: string, command: unknown): void { this.commands.set(name, command); }
 	on(event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown): void {
 		const handlers = this.lifecycle.get(event) ?? [];
 		handlers.push(handler);

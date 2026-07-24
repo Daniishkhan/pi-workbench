@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { readJson, writeJsonAtomic } from "../core/json.ts";
 
 export type MemberStatus = "running" | "stopping" | "idle" | "failed" | "stopped";
 export type TaskStatus = "pending" | "in_progress" | "completed";
@@ -161,22 +162,6 @@ export function withLock<T>(dir: string, fn: () => T): T {
 	} finally {
 		fs.rmSync(lockPath, { recursive: true, force: true });
 	}
-}
-
-export function readJson<T>(file: string, fallback: T): T {
-	try {
-		return JSON.parse(fs.readFileSync(file, "utf8")) as T;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback;
-		throw error;
-	}
-}
-
-export function writeJsonAtomic(file: string, data: unknown): void {
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const tmp = `${file}.tmp-${process.pid}-${randomUUID().slice(0, 8)}`;
-	fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-	fs.renameSync(tmp, file);
 }
 
 // ---------------------------------------------------------------------------

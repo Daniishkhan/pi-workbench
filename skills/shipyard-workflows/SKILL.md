@@ -9,7 +9,7 @@ Shipyard layers opinionated workflows on `pi-subagents`; it does not replace the
 
 ## Preferred entry points
 
-For natural-language orchestration, call `shipyard_workflow`:
+Select Shipyard through `workbench_route` using one of these modes:
 
 - `explore`: grep-driven codebase Q&A, call-path tracing, history, and reusable repository context;
 - `debug`: scope, safely reproduce, localize, establish root cause, and propose the smallest fix;
@@ -21,7 +21,7 @@ For natural-language orchestration, call `shipyard_workflow`:
 - `deliver`: read, plan, implement, run a focused two-angle review, apply verified fixes, and prepare a validated shipping handoff;
 - `ship`: review and fix an existing diff, revalidate, and prepare a shipping handoff.
 
-Humans use one command: `/shipyard <mode> [task]`. Run `/shipyard` without arguments for the compact mode list.
+Humans use `/workbench <mode> [task]` or `/work <mode> [task]`. There is no standalone `/shipyard` command or `shipyard_workflow` router tool.
 
 ## Context discipline
 

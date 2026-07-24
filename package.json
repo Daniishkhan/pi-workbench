@@ -1,6 +1,6 @@
 {
   "name": "@danish/pi-workbench",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A unified, modular Pi orchestration system for one-off delegation, Shipyard workflows, agent teams, and bounded dynamic workflows.",
   "private": true,
   "type": "module",
@@ -13,7 +13,6 @@
     "examples/",
     "extensions/",
     "profiles/",
-    "prompts/",
     "skills/",
     "scripts/",
     "config.example.json",
@@ -31,7 +30,7 @@
     "dynamic-workflows"
   ],
   "scripts": {
-    "validate": "node scripts/validate.mjs",
+    "validate": "node --experimental-strip-types scripts/validate.ts",
     "verify:runtime": "node scripts/verify-runtime.mjs",
     "test:core": "node --experimental-strip-types --test test/core/*.test.ts",
     "test:shipyard": "node --experimental-strip-types --test test/shipyard/*.test.ts",
@@ -46,18 +45,7 @@
       "./extensions/index.ts"
     ],
     "skills": [
-      "./skills/pi-workbench",
-      "./skills/agent-teams",
-      "./skills/shipyard-bug-hunting",
-      "./skills/shipyard-delivery",
-      "./skills/shipyard-review-findings",
-      "./skills/shipyard-security-review",
-      "./skills/shipyard-ui-review",
-      "./skills/shipyard-validation",
-      "./skills/shipyard-workflows"
-    ],
-    "prompts": [
-      "./prompts"
+      "./skills/pi-workbench"
     ],
     "subagents": {
       "agents": [
@@ -87,9 +75,17 @@
     "typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": { "optional": true },
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-tui": { "optional": true },
-    "typebox": { "optional": true }
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   }
 }

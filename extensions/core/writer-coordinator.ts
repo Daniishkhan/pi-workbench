@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultAgentDir } from "./config.ts";
+import { writeJsonAtomic } from "./json.ts";
 
 export interface WriterLease {
 	version: 1;
@@ -35,13 +36,6 @@ function processAlive(pid: number): boolean {
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
-}
-
-function writeJsonAtomic(file: string, value: unknown): void {
-	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-	const temp = `${file}.tmp-${process.pid}-${randomUUID().slice(0, 8)}`;
-	fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-	fs.renameSync(temp, file);
 }
 
 function canonicalPath(value: string): string {

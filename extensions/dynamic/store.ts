@@ -1,8 +1,11 @@
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ensurePrivateDir, writeJsonAtomic, writeTextAtomic } from "../core/json.ts";
+import { safePathSegment } from "../core/sanitize.ts";
 import { normalizeWorkflowName, workflowSourceHash } from "./manifest.ts";
 import type { WorkflowManifest, WorkflowRunSnapshot, WorkflowScope, WorkflowSource } from "./types.ts";
+
+export { writeJsonAtomic };
 
 interface StoredMetadata {
 	version: 1;
@@ -25,36 +28,8 @@ export interface WorkflowStoreOptions {
 	projectTrusted: boolean;
 }
 
-function sanitizeSegment(value: string): string {
-	return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "unknown";
-}
-
 function readJson<T>(file: string): T {
 	return JSON.parse(fs.readFileSync(file, "utf8")) as T;
-}
-
-function ensurePrivateDir(dir: string): void {
-	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-	try { fs.chmodSync(dir, 0o700); } catch { /* Best effort on filesystems without POSIX modes. */ }
-}
-
-function writeAtomic(file: string, content: string): void {
-	ensurePrivateDir(path.dirname(file));
-	const temp = `${file}.tmp-${process.pid}-${randomUUID().slice(0, 8)}`;
-	fs.writeFileSync(temp, content, { encoding: "utf8", mode: 0o600 });
-	fs.renameSync(temp, file);
-}
-
-export function writeJsonAtomic(file: string, value: unknown): void {
-	const serialized = JSON.stringify(value, (_key, child) => {
-		if (typeof child === "number" && !Number.isFinite(child)) {
-			throw new Error(`Refusing to persist non-finite JSON number to '${file}'.`);
-		}
-		if (typeof child === "bigint") throw new Error(`Refusing to persist BigInt to JSON file '${file}'.`);
-		return child;
-	}, 2);
-	if (serialized === undefined) throw new Error(`Refusing to persist undefined JSON root to '${file}'.`);
-	writeAtomic(file, `${serialized}\n`);
 }
 
 function sourcePaths(root: string, name: string): { sourcePath: string; metadataPath: string } {
@@ -89,7 +64,7 @@ export class WorkflowStore {
 	constructor(options: WorkflowStoreOptions) {
 		this.agentDir = path.resolve(options.agentDir);
 		this.cwd = path.resolve(options.cwd);
-		this.sessionId = sanitizeSegment(options.sessionId);
+		this.sessionId = safePathSegment(options.sessionId);
 		this.projectTrusted = options.projectTrusted;
 		this.userRoot = path.join(this.agentDir, "workflows");
 		this.projectRoot = path.join(this.cwd, options.configDirName, "workflows");
@@ -106,7 +81,7 @@ export class WorkflowStore {
 		const normalizedSource = source.endsWith("\n") ? source : `${source}\n`;
 		const hash = workflowSourceHash(normalizedSource);
 		const paths = sourcePaths(this.draftRoot, name);
-		writeAtomic(paths.sourcePath, normalizedSource);
+		writeTextAtomic(paths.sourcePath, normalizedSource);
 		writeJsonAtomic(paths.metadataPath, {
 			version: 1,
 			name,
@@ -185,7 +160,7 @@ export class WorkflowStore {
 		if (!overwrite && (fs.existsSync(paths.sourcePath) || fs.existsSync(paths.metadataPath))) {
 			throw new Error(`A ${scope} workflow named '${name}' already exists. Set overwrite=true to replace it.`);
 		}
-		writeAtomic(paths.sourcePath, draft.source.endsWith("\n") ? draft.source : `${draft.source}\n`);
+		writeTextAtomic(paths.sourcePath, draft.source.endsWith("\n") ? draft.source : `${draft.source}\n`);
 		writeJsonAtomic(paths.metadataPath, {
 			version: 1,
 			name,
@@ -214,7 +189,7 @@ export class WorkflowStore {
 	}
 
 	createRunDir(id: string): string {
-		const dir = path.join(this.runsRoot, sanitizeSegment(id));
+		const dir = path.join(this.runsRoot, safePathSegment(id));
 		ensurePrivateDir(dir);
 		ensurePrivateDir(path.join(dir, "agents"));
 		ensurePrivateDir(path.join(dir, "artifacts"));
@@ -222,7 +197,7 @@ export class WorkflowStore {
 	}
 
 	writeRunSource(runDir: string, source: string, input: unknown): void {
-		writeAtomic(path.join(runDir, "source.workflow.js"), source.endsWith("\n") ? source : `${source}\n`);
+		writeTextAtomic(path.join(runDir, "source.workflow.js"), source.endsWith("\n") ? source : `${source}\n`);
 		writeJsonAtomic(path.join(runDir, "input.json"), input ?? null);
 	}
 
@@ -236,7 +211,7 @@ export class WorkflowStore {
 
 	readRunStatus(id: string): WorkflowRunSnapshot | undefined {
 		try {
-			return readJson<WorkflowRunSnapshot>(path.join(this.runsRoot, sanitizeSegment(id), "status.json"));
+			return readJson<WorkflowRunSnapshot>(path.join(this.runsRoot, safePathSegment(id), "status.json"));
 		} catch {
 			return undefined;
 		}

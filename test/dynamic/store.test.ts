@@ -57,7 +57,7 @@ test("preserves Workbench workflow, draft, run, and trust roots", () => {
 	assert.equal(store.trustPath, path.join(root, "agent", "workflow-trust.json"));
 });
 
-test("saved resolution and direct-command listings cannot be shadowed by drafts", () => {
+test("saved-only resolution and listings cannot be shadowed by drafts", () => {
 	const { store } = makeStore(true);
 	const savedRaw = source("saved-flow");
 	store.stage("saved-flow", savedRaw, compileWorkflowSource(savedRaw).manifest);

@@ -10,6 +10,7 @@ import {
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { textResult } from "../core/result.ts";
 import {
 	addFinding,
 	exportFindings,
@@ -91,10 +92,6 @@ function requiredText(value: string | undefined, label: string): string {
 	const trimmed = value?.trim();
 	if (!trimmed) throw new Error(`${label} is required for this action.`);
 	return trimmed;
-}
-
-function textResult(text: string, details: Record<string, unknown> = {}) {
-	return { content: [{ type: "text" as const, text }], details };
 }
 
 function normalizeEvidence(cwd: string, evidence: FindingEvidence[]): FindingEvidence[] {

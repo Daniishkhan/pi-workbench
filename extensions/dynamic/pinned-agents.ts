@@ -1,19 +1,16 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ROLE_POLICIES } from "../core/role-policy.ts";
 
-export const DYNAMIC_READER_ROLES = [
-	"scout",
-	"planner",
-	"researcher",
-	"context-builder",
-	"pi-workbench.fast-scout",
-	"pi-workbench.deep-reader",
-	"pi-workbench.planner",
-	"pi-workbench.researcher",
-] as const;
+/** Logical read-only roles a dynamic workflow may reference are derived from
+ * the shared role policy: read-only capability plus the dynamic surface.
+ * pi-workbench.reviewer is excluded — it maps to the verifier definition. */
+export const DYNAMIC_READER_ROLES: readonly string[] = Object.entries(ROLE_POLICIES)
+	.filter(([name, policy]) => policy.capability === "read-only" && policy.surfaces.includes("dynamic") && name !== "pi-workbench.reviewer")
+	.map(([name]) => name);
 
-export const DYNAMIC_VERIFIER_ROLES = ["pi-workbench.reviewer"] as const;
+export const DYNAMIC_VERIFIER_ROLES: readonly string[] = ["pi-workbench.reviewer"];
 
 export interface PinnedReadOnlyAgents {
 	map: Readonly<Record<string, string>>;

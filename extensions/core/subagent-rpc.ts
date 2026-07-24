@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
 
 export const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
 export const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
@@ -15,10 +16,8 @@ export interface SubagentRpcReply {
 	error?: { code?: string; message?: string };
 }
 
-export interface SubagentRpcEventBus {
-	on(event: string, handler: (payload: unknown) => void): (() => void) | void;
-	emit(event: string, payload: unknown): void;
-}
+/** @deprecated Alias kept for existing imports; use pi's public EventBus type. */
+export type SubagentRpcEventBus = EventBus;
 
 export interface SubagentRpcClientOptions {
 	label: string;
@@ -27,14 +26,14 @@ export interface SubagentRpcClientOptions {
 }
 
 export class SubagentRpcClient {
-	readonly #events: SubagentRpcEventBus;
+	readonly #events: EventBus;
 	readonly #label: string;
 	readonly #source: string;
 	readonly #timeoutMs: number;
 	readonly #pending = new Map<string, (reason: string) => void>();
 	#disposed = false;
 
-	constructor(events: SubagentRpcEventBus, options: SubagentRpcClientOptions) {
+	constructor(events: EventBus, options: SubagentRpcClientOptions) {
 		this.#events = events;
 		this.#label = options.label;
 		this.#source = options.source;

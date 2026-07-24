@@ -1,6 +1,15 @@
+#!/usr/bin/env node
+/**
+ * Pi Workbench package validator. Runs under node --experimental-strip-types
+ * so policy can be checked structurally against the real registries (role
+ * policy, workflow catalog, findings policy) instead of duplicated lists.
+ */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ROLE_POLICIES } from "../extensions/core/role-policy.ts";
+import { capabilityPolicyForTask, FIRST_WAVE_OUTPUTS } from "../extensions/shipyard/findings-policy.ts";
+import { SHIPYARD_WORKFLOWS } from "../extensions/shipyard/workflow-catalog.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const errors = [];
@@ -55,10 +64,14 @@ if (packageJson) {
 	}
 	if (packageJson.bundledDependencies?.includes?.("pi-subagents")) fail("package.json: do not vendor pi-subagents source into the Workbench tarball");
 	if (!packageJson.files?.includes?.("THIRD_PARTY.md") || !existsSync(path.join(root, "THIRD_PARTY.md"))) fail("package.json: third-party provenance must ship with Workbench");
+	if (Array.isArray(packageJson.pi?.prompts) && packageJson.pi.prompts.length > 0) fail("package.json: prompt templates create alternate slash commands; Workbench must expose only /workbench and /work");
+	const expectedPublicSkills = ["./skills/pi-workbench"];
+	if (JSON.stringify(packageJson.pi?.skills) !== JSON.stringify(expectedPublicSkills)) {
+		fail("package.json: only the Workbench routing skill may enter Pi's parent skill catalog");
+	}
 	for (const [kind, entries] of Object.entries({
 		extensions: packageJson.pi?.extensions,
 		skills: packageJson.pi?.skills,
-		prompts: packageJson.pi?.prompts,
 		agents: packageJson.pi?.subagents?.agents,
 		chains: packageJson.pi?.subagents?.chains,
 	})) {
@@ -70,6 +83,11 @@ if (packageJson) {
 const agentFiles = walk(path.join(root, "agents"), (file) => file.endsWith(".md"));
 const agentNames = new Set();
 const agentMeta = new Map();
+/** Documented places where launch capability deliberately differs from the
+ * pi-subagents acceptanceRole frontmatter (acceptance inference only). */
+const CAPABILITY_FRONTMATTER_EXCEPTIONS = {
+	"pi-shipyard.shipwright": "frontmatter acceptanceRole 'writer' validates writer output; launch capability stays read-only (no edit/write tools)",
+};
 for (const file of agentFiles) {
 	const fm = parseFrontmatter(file);
 	if (!fm.name) fail(`${relative(file)}: missing name`);
@@ -93,6 +111,26 @@ for (const file of agentFiles) {
 	}
 }
 
+// Role-policy registry stays in sync with agent frontmatter (capability vs acceptanceRole).
+for (const [runtimeName, { file, fm }] of agentMeta) {
+	const policy = ROLE_POLICIES[runtimeName];
+	if (!policy) {
+		fail(`${relative(file)}: ${runtimeName} has no ROLE_POLICIES entry in extensions/core/role-policy.ts`);
+		continue;
+	}
+	if (!fm.acceptanceRole) {
+		fail(`${relative(file)}: missing acceptanceRole; the role-policy cross-check requires an explicit declaration`);
+	} else if (policy.capability !== fm.acceptanceRole && !CAPABILITY_FRONTMATTER_EXCEPTIONS[runtimeName]) {
+		fail(`${relative(file)}: frontmatter acceptanceRole '${fm.acceptanceRole}' disagrees with role policy capability '${policy.capability}'`);
+	}
+}
+for (const runtimeName of Object.keys(ROLE_POLICIES)) {
+	const packaged = ["pi-workbench.", "pi-shipyard.", "pi-agent-teams."].some((prefix) => runtimeName.startsWith(prefix));
+	if (packaged && !agentNames.has(runtimeName)) {
+		fail(`role-policy: ${runtimeName} is registered but has no agent file under agents/`);
+	}
+}
+
 const skillFiles = walk(path.join(root, "skills"), (file) => path.basename(file) === "SKILL.md");
 const skillNames = new Set();
 for (const file of skillFiles) {
@@ -102,10 +140,19 @@ for (const file of skillFiles) {
 	if (skillNames.has(fm.name)) fail(`${relative(file)}: duplicate skill ${fm.name}`);
 	skillNames.add(fm.name);
 }
+const publicSkillNames = new Set((packageJson?.pi?.skills ?? []).map((entry) => path.basename(entry)));
 for (const file of agentFiles) {
 	const fm = parseFrontmatter(file);
+	const privateSkillRoots = (fm.skillPath ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 	for (const skill of (fm.skills ?? "").split(",").map((value) => value.trim()).filter(Boolean)) {
 		if (!skillNames.has(skill)) fail(`${relative(file)}: unknown selected skill ${skill}`);
+		if (publicSkillNames.has(skill)) continue;
+		const privatelyResolvable = privateSkillRoots.some((entry) => {
+			const candidate = path.resolve(path.dirname(file), entry);
+			return (path.basename(candidate) === skill && existsSync(path.join(candidate, "SKILL.md")))
+				|| existsSync(path.join(candidate, skill, "SKILL.md"));
+		});
+		if (!privatelyResolvable) fail(`${relative(file)}: private selected skill ${skill} must resolve through skillPath`);
 	}
 }
 
@@ -113,6 +160,12 @@ const profile = readJson(path.join(root, "profiles", "recommended-agent-override
 if (profile?.schemaVersion !== 1 || !profile?.agentOverrides) fail("profiles/recommended-agent-overrides.json: invalid profile");
 for (const agent of agentNames) if (!profile?.agentOverrides?.[agent]) fail(`profile: missing model policy for ${agent}`);
 for (const agent of Object.keys(profile?.agentOverrides ?? {})) if (!agentNames.has(agent)) fail(`profile: unknown agent ${agent}`);
+
+// The workflow catalog is the single source for Shipyard chain files.
+const catalogFiles = new Set(Object.values(SHIPYARD_WORKFLOWS).map((definition) => definition.file));
+for (const [name, definition] of Object.entries(SHIPYARD_WORKFLOWS)) {
+	if (!existsSync(path.join(root, "chains", "shipyard", definition.file))) fail(`workflow catalog: missing chain file ${definition.file} for '${name}'`);
+}
 
 const outputReferencePattern = /\{outputs\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const allowedStepKeys = new Set([
@@ -136,9 +189,15 @@ function inspectTask(chainLabel, stepNumber, task, available, produced, isParall
 	if ([...(task.task?.matchAll(outputReferencePattern) ?? [])].length > 0 && !task.task.includes("Open and read every referenced output artifact before reasoning")) {
 		fail(`${prefix}: file-only consumer must explicitly open referenced artifacts`);
 	}
-	if (["contracts", "runtime", "adversarial", "integration", "security", "ui"].includes(task.as ?? "")
+	if (FIRST_WAVE_OUTPUTS.has(task.as ?? "")
 		&& !task.task.includes("Independent-wave rule: do not call review_findings list")) {
 		fail(`${prefix}: first-wave reviewer must prohibit peer-ledger reads`);
+	}
+	// Findings policy must derive cleanly for every step (stage regex + role table).
+	try {
+		capabilityPolicyForTask(task);
+	} catch (error) {
+		fail(`${prefix}: findings policy derivation failed: ${error instanceof Error ? error.message : error}`);
 	}
 	if (task.as) {
 		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(task.as)) fail(`${prefix}: invalid as name ${task.as}`);
@@ -167,6 +226,7 @@ const chainFiles = walk(path.join(root, "chains"), (file) => file.endsWith(".cha
 for (const file of chainFiles) {
 	const chain = readJson(file);
 	const label = relative(file);
+	if (!catalogFiles.has(path.basename(file))) fail(`${label}: chain file is not referenced by the Shipyard workflow catalog`);
 	if (!chain?.name || !chain?.description || !Array.isArray(chain.chain)) { fail(`${label}: invalid chain root`); continue; }
 	if (chain.package !== "pi-shipyard") fail(`${label}: compatibility namespace must remain pi-shipyard`);
 	const available = new Set();
@@ -201,9 +261,6 @@ const shipyardSource = readFileSync(path.join(root, "extensions", "shipyard", "w
 if (!shipyardSource.includes("artifacts: false") || shipyardSource.includes("artifacts: true")) fail("Shipyard launches must disable project-local pi-subagents artifacts");
 const workflowPolicySource = readFileSync(path.join(root, "extensions", "shipyard", "workflow-policy.ts"), "utf8");
 if (!shipyardSource.includes("bindWorkflowAgents") || !workflowPolicySource.includes("export function bindWorkflowAgents")) fail("Shipyard must support canonical role bindings");
-const teamsRpc = readFileSync(path.join(root, "extensions", "teams", "rpc.ts"), "utf8");
-const shipyardRpc = readFileSync(path.join(root, "extensions", "shipyard", "rpc-client.ts"), "utf8");
-if (!teamsRpc.includes("../core/subagent-rpc.ts") || !shipyardRpc.includes("../core/subagent-rpc.ts")) fail("Shipyard and Teams must share the core RPC implementation");
 const dynamicDelegation = readFileSync(path.join(root, "extensions", "dynamic", "delegation.ts"), "utf8");
 if (dynamicDelegation.includes("parallelResults") || dynamicDelegation.includes("LegacyResponse")) fail("Dynamic workflows must not use the unversioned legacy batch bridge");
 if (!dynamicDelegation.includes("this.runSingle")) fail("Dynamic read-only fanout must use versioned single delegations");
@@ -217,15 +274,32 @@ if ((entrySource.match(/new SubagentRpcClient\(/g) ?? []).length !== 1) fail("Wo
 if (!entrySource.includes("registerSubagents(pi)")) fail("Workbench must register its pinned pi-subagents dependency");
 if (entrySource.indexOf("registerSubagents(pi)") > entrySource.indexOf("new SubagentRpcClient")) fail("pi-subagents must register before Workbench constructs its RPC client");
 if (!entrySource.includes("SUBAGENTS_SKILL")) fail("Workbench must rediscover the upstream pi-subagents skill");
-for (const relativePath of ["extensions/router.ts", "extensions/shipyard/workflows.ts", "extensions/teams/index.ts"]) {
-	const source = readFileSync(path.join(root, relativePath), "utf8");
-	if (/new (?:SubagentRpcClient|ShipyardRpcClient|TeamsRpcClient)\(/.test(source)) fail(`${relativePath} must use the shared RPC client`);
+const extensionFiles = walk(path.join(root, "extensions"), (file) => file.endsWith(".ts"));
+for (const file of extensionFiles) {
+	if (file === path.join(root, "extensions", "index.ts")) continue;
+	const source = readFileSync(file, "utf8");
+	if (/new (?:SubagentRpcClient|ShipyardRpcClient|TeamsRpcClient)\(/.test(source)) {
+		fail(`${relative(file)} must use the shared RPC client from the composition root`);
+	}
 }
-const allSource = walk(path.join(root, "extensions"), (file) => file.endsWith(".ts")).map((file) => readFileSync(file, "utf8")).join("\n");
+const allSource = extensionFiles.map((file) => readFileSync(file, "utf8")).join("\n");
 if (/from\s+["'][^"']*pi-subagents\/src\//.test(allSource)) fail("Extensions must not deep-import pi-subagents internals");
+for (const file of extensionFiles) {
+	if (file === path.join(root, "extensions", "router.ts")) continue;
+	if (readFileSync(file, "utf8").includes(".registerCommand(")) {
+		fail(`${relative(file)}: only the package router may register slash commands`);
+	}
+}
+const routerSource = readFileSync(path.join(root, "extensions", "router.ts"), "utf8");
+const routerCommands = [...routerSource.matchAll(/\.registerCommand\(["']([^"']+)["']/g)].map((match) => match[1]).sort();
+if (JSON.stringify(routerCommands) !== JSON.stringify(["work", "workbench"])) {
+	fail(`extensions/router.ts: expected only /workbench and /work commands, found ${routerCommands.join(", ") || "none"}`);
+}
+if (allSource.includes('name: "shipyard_workflow"')) fail("Shipyard must be routed only through workbench_route, not a standalone tool router");
 
-const promptFiles = walk(path.join(root, "prompts"), (file) => file.endsWith(".md"));
-for (const file of promptFiles) if (!parseFrontmatter(file).description) fail(`${relative(file)}: missing prompt description`);
+const promptDir = path.join(root, "prompts");
+const promptFiles = existsSync(promptDir) ? walk(promptDir, (file) => file.endsWith(".md")) : [];
+if (promptFiles.length > 0) fail("prompts/: prompt templates create alternate slash commands; route human orchestration through /workbench or /work");
 
 if (errors.length) {
 	console.error("Pi Workbench validation failed:");

@@ -11,7 +11,7 @@ Agent teams coordinate multiple independent Pi sessions. You are the **team lead
 
 - **Plain pi-subagents** (`subagent`, `/run`, `/parallel`): focused report-back tasks — one question, one review, one isolated job. Cheapest; workers never talk to each other.
 - **Agent teams** (this skill): work that needs *coordination* — peers sharing findings mid-flight, cross-layer ownership, competing hypotheses, long multi-part efforts. Higher token cost.
-- **Shipyard** (`/shipyard`): fixed engineering pipelines (review mesh, deliver, ship) with their own gates. Don't rebuild those with teams.
+- **Shipyard** (`/workbench review|deliver|ship ...`): fixed engineering pipelines with their own gates. Don't rebuild those with teams.
 
 If teammates wouldn't need to talk to each other, use pi-subagents instead.
 
@@ -33,6 +33,6 @@ If teammates wouldn't need to talk to each other, use pi-subagents instead.
 - Write conflicts are the main failure mode — if two teammates must touch the same file, sequence them with task `deps` instead of running them in parallel.
 - Teammates never commit or push; final integration and validation are yours.
 
-## Human commands
+## Workbench entry point
 
-`/team` (dashboard) · `/team new <goal>` · `/team spawn <name>|<role>|<task>` · `/team say <to> <msg>` · `/team tasks` · `/team stop <name>` · `/team disband`
+Humans enter through `/workbench team <goal>` (or `/work team <goal>`). Models select the mode with `workbench_route`, then use the `team_*` operational tools for team lifecycle, tasks, mail, notes, and status. There is no standalone `/team` command.

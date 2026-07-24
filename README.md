@@ -96,7 +96,7 @@ Humans use `/workbench` or `/work`:
 
 Models use `workbench_route` with the same explicit modes. There is no keyword-based auto-router: routing is deterministic and visible.
 
-Existing `/shipyard`, `/team`, `/workflows`, and their tools remain available when their modules are enabled.
+Workbench registers no module-specific orchestration commands. Legacy `/shipyard`, `/team`, `/workflow`, `/workflows`, `/ultracode`, and saved-workflow slash commands are not exposed. Supporting `team_*` and `workflow_*` tools are operational primitives used only after `workbench_route` selects those modes; Shipyard launches directly through the router's internal service.
 
 ## Selection policy
 
@@ -184,6 +184,10 @@ Compatibility namespaces remain unchanged:
 
 No package agent registers as bare `scout`, so it cannot unexpectedly shadow the clean builtin.
 
+## Skills
+
+The Pi package manifest exposes only the unified `pi-workbench` routing skill to the parent session. The `agent-teams` and specialized `shipyard-*` skills remain packaged under `skills/` for internal use, but they do not appear in Pi's global startup skill list.
+
 ## Writer guard
 
 Durable writer leases live under:
@@ -207,7 +211,7 @@ This guard covers Workbench-managed launches, not arbitrary direct calls to anot
 
 ## Dynamic Workflows
 
-Dynamic Workflows are disabled by default. When enabled they retain exact-source editing, hash-bound approval, budgets, state artifacts, structured outputs, bounded loops, and branching. The reviewed bytes—not an earlier draft—are compiled and executed; saved slash commands resolve saved definitions directly, so a same-name session draft cannot shadow them.
+Dynamic Workflows are disabled by default. When enabled they retain exact-source editing, hash-bound approval, budgets, state artifacts, structured outputs, bounded loops, and branching. The reviewed bytes—not an earlier draft—are compiled and executed. Saved definitions remain reusable through the Workbench dynamic route and `workflow_run`; they do not create slash commands.
 
 Compiler provenance checks reject forged nodes/references, unsafe schema shapes, non-finite values, undeclared skills/acceptance payloads, future or scope-invalid references, and nested phases. Input, individual output, aggregate intermediate values, and the selected final result all have hard limits. Interrupted statuses remain inspectable and are reconciled as failed after reload.
 
@@ -255,11 +259,10 @@ After settings migration and `/reload`:
 ```text
 /subagents-doctor
 /workbench
-/shipyard
-/team
+/work
 ```
 
-Dynamic enablement should be smoke-tested separately on a disposable repository.
+Confirm that `/shipyard`, `/team`, `/workflow`, `/workflows`, and `/ultracode` are absent. Dynamic enablement should be smoke-tested separately on a disposable repository.
 
 ## Shipping boundary
 

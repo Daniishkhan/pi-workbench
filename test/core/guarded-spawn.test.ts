@@ -1,0 +1,173 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { beginGuardedSpawn } from "../../extensions/core/guarded-spawn.ts";
+import type { SubagentRpcReply } from "../../extensions/core/subagent-rpc.ts";
+import type { WriterLease } from "../../extensions/core/writer-coordinator.ts";
+
+class FakeRpc {
+	readonly calls: Array<{ method: string; params: Record<string, unknown>; signal?: AbortSignal }> = [];
+	private readonly plan: (method: string) => SubagentRpcReply | Error;
+	constructor(plan: (method: string) => SubagentRpcReply | Error) { this.plan = plan; }
+	async request(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<SubagentRpcReply> {
+		this.calls.push({ method, params, signal });
+		const outcome = this.plan(method);
+		if (outcome instanceof Error) throw outcome;
+		return outcome;
+	}
+}
+
+class FakeCoordinator {
+	readonly acquired: string[] = [];
+	readonly released: Array<string | undefined> = [];
+	readonly uncertain: Array<string | undefined> = [];
+	readonly attached: Array<{ token: string | undefined; runId: string | undefined }> = [];
+	failAcquire?: Error;
+	acquire(cwd: string, owner: string): WriterLease {
+		if (this.failAcquire) throw this.failAcquire;
+		this.acquired.push(owner);
+		return { version: 1, token: `token-${this.acquired.length}`, cwd, owner, createdAt: Date.now(), pid: 1 };
+	}
+	release(token: string | undefined): boolean { this.released.push(token); return true; }
+	markUncertain(token: string | undefined): void { this.uncertain.push(token); }
+	attachRun(token: string | undefined, runId: string | undefined): void { this.attached.push({ token, runId }); }
+}
+
+function reply(overrides: Partial<SubagentRpcReply> = {}): SubagentRpcReply {
+	return { version: 1, requestId: "r", success: true, ...overrides };
+}
+
+const ctx = { cwd: "/repo" };
+
+test("read-only spawns skip the lease entirely and pass the signal through", async () => {
+	const rpc = new FakeRpc(() => reply({ data: { text: "launched", details: { runId: "run-1" } } }));
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "test", writeCapable: false, label: "Test",
+	});
+	const controller = new AbortController();
+	const { reply: spawnReply, runId } = await guard.spawn({ params: { agent: "a" }, signal: controller.signal });
+	assert.equal(runId, "run-1");
+	assert.equal(spawnReply.success, true);
+	assert.equal(guard.lease, undefined);
+	assert.deepEqual(coordinator.acquired, []);
+	assert.equal(rpc.calls[1]?.signal, controller.signal);
+	guard.discard();
+	assert.deepEqual(coordinator.released, []);
+});
+
+test("writer spawn attaches the lease to the returned run id", async () => {
+	const rpc = new FakeRpc(() => reply({ data: { details: { runId: "run-9" } } }));
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "writer", writeCapable: true, label: "Test",
+	});
+	await guard.spawn({ params: {} });
+	assert.deepEqual(coordinator.attached, [{ token: "token-1", runId: "run-9" }]);
+	assert.deepEqual(coordinator.released, []);
+	guard.discard(); // no-op: the run owns the lease now
+	assert.deepEqual(coordinator.released, []);
+});
+
+test("success without a run id marks the lease uncertain and keeps it", async () => {
+	const rpc = new FakeRpc(() => reply({ data: { text: "launched" } }));
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "writer", writeCapable: true, label: "Test",
+	});
+	const { runId } = await guard.spawn({ params: {} });
+	assert.equal(runId, undefined);
+	assert.deepEqual(coordinator.uncertain, ["token-1"]);
+	assert.deepEqual(coordinator.released, []);
+});
+
+test("requireRunIdMessage throws after marking the lease uncertain", async () => {
+	const rpc = new FakeRpc(() => reply({ data: {} }));
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "writer", writeCapable: true, label: "Spawn",
+	});
+	await assert.rejects(
+		() => guard.spawn({ params: {}, requireRunIdMessage: "accepted without a run id" }),
+		/accepted without a run id/,
+	);
+	assert.deepEqual(coordinator.uncertain, ["token-1"]);
+	assert.deepEqual(coordinator.released, []);
+});
+
+test("ping transport error releases the lease and rethrows the original error", async () => {
+	const failure = new Error("bus exploded");
+	const rpc = new FakeRpc((method) => method === "ping" ? failure : reply());
+	const coordinator = new FakeCoordinator();
+	await assert.rejects(
+		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
+		(error) => error === failure,
+	);
+	assert.deepEqual(coordinator.released, ["token-1"]);
+});
+
+test("ping RPC-level failure releases the lease with a labeled error", async () => {
+	const rpc = new FakeRpc((method) => method === "ping" ? reply({ success: false, error: { message: "no session" } }) : reply());
+	const coordinator = new FakeCoordinator();
+	await assert.rejects(
+		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Shipyard workflow launch" }),
+		/Shipyard workflow launch: pi-subagents RPC unavailable: no session/,
+	);
+	assert.deepEqual(coordinator.released, ["token-1"]);
+});
+
+test("spawn transport error marks uncertain, keeps the lease, journals, and rethrows", async () => {
+	const failure = new Error("reply lost");
+	const rpc = new FakeRpc((method) => method === "spawn" ? failure : reply());
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
+	});
+	const journal: string[] = [];
+	await assert.rejects(
+		() => guard.spawn({ params: {}, onTransportError: () => { journal.push("launch-uncertain"); } }),
+		(error) => error === failure,
+	);
+	assert.deepEqual(journal, ["launch-uncertain"]);
+	assert.deepEqual(coordinator.uncertain, ["token-1"]);
+	guard.discard(); // no-op: launch state is uncertain, lease is preserved
+	assert.deepEqual(coordinator.released, []);
+});
+
+test("spawn RPC-level rejection journals then releases the lease", async () => {
+	const rpc = new FakeRpc((method) => method === "spawn" ? reply({ success: false, error: { code: "invalid_params", message: "bad agent" } }) : reply());
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Workbench launch",
+	});
+	const journal: string[] = [];
+	await assert.rejects(
+		() => guard.spawn({ params: {}, onRejected: () => { journal.push("rejected"); } }),
+		/Workbench launch failed: invalid_params: bad agent/,
+	);
+	assert.deepEqual(journal, ["rejected"]);
+	assert.deepEqual(coordinator.released, ["token-1"]);
+	assert.deepEqual(coordinator.uncertain, []); // a clean rejection is never uncertain
+});
+
+test("acquire conflicts propagate before any RPC call", async () => {
+	const rpc = new FakeRpc(() => reply());
+	const coordinator = new FakeCoordinator();
+	coordinator.failAcquire = new Error("Workbench writer guard: busy");
+	await assert.rejects(
+		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
+		/busy/,
+	);
+	assert.equal(rpc.calls.length, 0);
+});
+
+test("discard before spawn releases; discard after success does not", async () => {
+	const rpc = new FakeRpc(() => reply({ data: { details: { runId: "run-1" } } }));
+	const coordinator = new FakeCoordinator();
+	const first = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
+	});
+	first.discard();
+	assert.deepEqual(coordinator.released, ["token-1"]);
+	first.discard(); // idempotent
+	assert.deepEqual(coordinator.released, ["token-1"]);
+});

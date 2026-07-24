@@ -11,6 +11,7 @@ import {
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { textResult } from "../core/result.ts";
 import { isRepositoryContextFresh, repositoryContextPath } from "./repo-context-key.ts";
 import { inspectRepositoryState } from "./repo-context-state.ts";
 
@@ -33,10 +34,6 @@ const ContextUpdateParams = Type.Object({
 		description: "Concise reusable repository map with verified paths, entry points, module responsibilities, flows, and test commands",
 	}),
 }, { additionalProperties: false });
-
-function textResult(text: string, details: Record<string, unknown> = {}) {
-	return { content: [{ type: "text" as const, text }], details };
-}
 
 async function currentRepositoryState(pi: ExtensionAPI, cwd: string, signal?: AbortSignal) {
 	return inspectRepositoryState(cwd, (args) => pi.exec("git", args, {

@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 skills: shipyard-validation
+skillPath: ../../skills
 defaultContext: fork
 acceptanceRole: read-only
 acceptance: {"level":"none","reason":"Planning is read-only; no project/source mutations are allowed."}

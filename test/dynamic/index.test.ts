@@ -240,7 +240,7 @@ test("recompiles trusted saved bytes before writer leasing instead of trusting s
 	const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as { manifest: { permissions: string[] } };
 	metadata.manifest.permissions = ["read"];
 	fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
-	await harness.pi.commands.get("metadata-flow")!.handler("", harness.ctx);
+	await harness.pi.tools.get("workflow_run")!.execute("run", { name: "metadata-flow", input: {}, background: false }, undefined, undefined, harness.ctx);
 	for (let index = 0; index < 20 && requests.length === 0; index++) await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(requests[0]?.agent, "pi-workbench.worker");
 	assert.equal(coordinator.acquired.length, 1, "compiled source permissions—not mutable metadata—must control writer ownership");
@@ -248,11 +248,10 @@ test("recompiles trusted saved bytes before writer leasing instead of trusting s
 	await harness.pi.emitLifecycle("session_shutdown", harness.ctx);
 });
 
-test("an exact reviewed save powers the direct command and bypasses a same-name draft", async () => {
+test("an exact reviewed save remains reusable without registering a slash command", async () => {
 	const original = workflowSource("saved-flow", "UNREVIEWED ORIGINAL");
 	const saved = workflowSource("saved-flow", "SAVED SOURCE");
-	const draftShadow = workflowSource("saved-flow", "DRAFT SHADOW");
-	const edits = [saved];
+	const edits = [saved, saved];
 	const harness = makeHarness(async () => edits.shift());
 	const requests: Array<Record<string, unknown>> = [];
 	autoComplete(harness.pi, requests);
@@ -261,14 +260,13 @@ test("an exact reviewed save powers the direct command and bypasses a same-name 
 
 	await harness.pi.tools.get("workflow_create")!.execute("create", { name: "saved-flow", source: original }, undefined, undefined, harness.ctx);
 	await harness.pi.tools.get("workflow_control")!.execute("save", { action: "save", name: "saved-flow", scope: "user" }, undefined, undefined, harness.ctx);
-	assert.ok(harness.pi.commands.has("saved-flow"));
-	await harness.pi.tools.get("workflow_create")!.execute("shadow", { name: "saved-flow", source: draftShadow }, undefined, undefined, harness.ctx);
-	await harness.pi.commands.get("saved-flow")!.handler("", harness.ctx);
+	assert.equal(harness.pi.commands.size, 0, "Dynamic Workflows must not create standalone slash commands");
+	await harness.pi.tools.get("workflow_run")!.execute("run", { name: "saved-flow", input: {}, background: false }, undefined, undefined, harness.ctx);
 	for (let index = 0; index < 20 && requests.length === 0; index++) await new Promise((resolve) => setImmediate(resolve));
 
 	assert.equal(requests.length, 1);
 	assert.match(String(requests[0]?.task), /SAVED SOURCE$/);
-	assert.doesNotMatch(String(requests[0]?.task), /UNREVIEWED ORIGINAL|DRAFT SHADOW/);
+	assert.doesNotMatch(String(requests[0]?.task), /UNREVIEWED ORIGINAL/);
 	assert.equal(harness.notifications.some((entry) => entry.level === "error"), false);
 	await harness.pi.emitLifecycle("session_shutdown", harness.ctx);
 });

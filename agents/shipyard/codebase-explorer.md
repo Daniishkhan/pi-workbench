@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 skills: shipyard-validation
+skillPath: ../../skills
 defaultContext: fresh
 acceptanceRole: read-only
 turnBudget: {"maxTurns":20,"graceTurns":2}

@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
-import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { isChildSession } from "../core/env.ts";
 import type { WriterCoordinator } from "../core/writer-coordinator.ts";
 import { compileWorkflowSource } from "./compiler.ts";
 import { loadConfig, resolveWorkflowPolicy } from "./config.ts";
-import { DelegationClient, type WorkflowEventBus } from "./delegation.ts";
+import { DelegationClient } from "./delegation.ts";
 import { WorkflowManager } from "./manager.ts";
 import { createPinnedReadOnlyAgents, type PinnedReadOnlyAgents } from "./pinned-agents.ts";
 import { WorkflowStore } from "./store.ts";
@@ -19,7 +19,6 @@ import type {
 	WorkflowSource,
 } from "./types.ts";
 
-const CHILD_ENV = "PI_SUBAGENT_CHILD";
 const WIDGET_KEY = "dynamic-workflows";
 const MESSAGE_TYPE = "dynamic-workflow-complete";
 const SOURCE_MAX_CHARS = 64 * 1024;
@@ -111,27 +110,15 @@ function formatWorkflow(source: WorkflowSource): string {
 	return `${source.name} [${source.scope}] · ${source.manifest.size} · ${source.manifest.permissions.join(",")} · ${source.manifest.description}`;
 }
 
-function commandInput(raw: string): Record<string, unknown> {
-	const text = raw.trim();
-	if (!text) return {};
-	if (text.startsWith("{")) {
-		const parsed = JSON.parse(text) as unknown;
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Workflow command JSON input must be an object.");
-		return parsed as Record<string, unknown>;
-	}
-	return { request: text };
-}
-
 export interface RegisterDynamicWorkflowsOptions {
 	writerCoordinator?: WriterCoordinator;
 }
 
 export default function registerDynamicWorkflows(pi: ExtensionAPI, options: RegisterDynamicWorkflowsOptions = {}): void {
-	if (process.env[CHILD_ENV] === "1") return;
+	if (isChildSession()) return;
 
 	let runtime: RuntimeState | undefined;
 	const sessionApprovals = new Set<string>();
-	const directCommands = new Set<string>();
 
 	function requireRuntime(ctx?: ExtensionContext): RuntimeState {
 		if (!runtime) throw new Error("Dynamic-workflows runtime is not initialized. Run /reload and try again.");
@@ -157,7 +144,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 				`Phase: ${snapshot.currentPhase ?? "starting"} · Agents: ${snapshot.agentsCompleted}/${snapshot.agentsLaunched}/${snapshot.policy.maxAgents}`,
 				...(active.length > 0 ? [`Active: ${active.join(", ")}`] : []),
 				...(snapshot.lastLog ? [snapshot.lastLog.split("\n", 1)[0]!] : []),
-				`/workflows to inspect · /workflow pause|resume|stop ${snapshot.id}`,
+				`Use /workbench dynamic to inspect or control run ${snapshot.id}`,
 			]);
 		} catch {
 			// The context can become stale during session replacement.
@@ -179,7 +166,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		} catch {
-			// The durable run result remains on disk and /workflows can inspect it.
+			// The durable run result remains on disk and workflow_control can inspect it.
 		}
 	}
 
@@ -200,7 +187,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		});
 		const pinnedAgents = createPinnedReadOnlyAgents(getAgentDir());
 		try {
-			const delegation = new DelegationClient((pi as unknown as { events: WorkflowEventBus }).events);
+			const delegation = new DelegationClient(pi.events);
 			const manager = new WorkflowManager({
 				store,
 				delegation,
@@ -210,7 +197,6 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 				onBackgroundComplete: backgroundComplete,
 			});
 			runtime = { store, manager, config, ctx, pinnedAgents };
-			registerSavedCommands(ctx);
 			return runtime;
 		} catch (error) {
 			pinnedAgents.dispose();
@@ -286,10 +272,9 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		ctx: ExtensionContext,
 		signal?: AbortSignal,
 		onUpdate?: (snapshot: WorkflowRunSnapshot) => void,
-		savedOnly = false,
 	): Promise<{ started: ReturnType<WorkflowManager["start"]>; result?: WorkflowRunResult }> {
 		const current = requireRuntime(ctx);
-		let source = savedOnly ? current.store.resolveSaved(name) : current.store.resolve(name);
+		let source = current.store.resolve(name);
 		if (source.scope === "project" && !ctx.isProjectTrusted()) {
 			throw new Error(`Project workflow '${name}' is unavailable because this project is not trusted.`);
 		}
@@ -324,29 +309,6 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		});
 		if (background) return { started };
 		return { started, result: await started.done };
-	}
-
-	function registerDirectCommand(name: string): boolean {
-		if (directCommands.has(name)) return true;
-		if (pi.getCommands().some((command) => command.name === name)) return false;
-		directCommands.add(name);
-		pi.registerCommand(name, {
-			description: `Run saved dynamic workflow '${name}' in the background`,
-			handler: async (args, ctx) => {
-				try {
-					const { started } = await startNamed(name, commandInput(args), true, ctx, undefined, undefined, true);
-					ctx.ui.notify(`Workflow '${name}' started: ${started.id}`, "info");
-				} catch (error) {
-					ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-				}
-			},
-		});
-		return true;
-	}
-
-	function registerSavedCommands(_ctx: ExtensionContext): void {
-		if (!runtime) return;
-		for (const source of runtime.store.listSaved()) registerDirectCommand(source.name);
 	}
 
 	pi.registerMessageRenderer<{ run?: WorkflowRunSnapshot }>(MESSAGE_TYPE, (message, _options, theme) => {
@@ -407,7 +369,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		promptSnippet: "Run a staged or saved workflow after human approval",
 		promptGuidelines: [
 			"Never claim a workflow ran until workflow_run returns a run id and terminal result (or a background start).",
-			"Use background=false when the current request must return the workflow result in this turn; use background=true only when the user wants monitoring through /workflows.",
+			"Use background=false when the current request must return the workflow result in this turn; use background=true only when the user wants asynchronous monitoring through workflow_control.",
 		],
 		executionMode: "sequential",
 		parameters: RunParams,
@@ -511,13 +473,12 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 					const reviewedDraft = current.store.stage(params.name, reviewedSource, reviewedCompiled.manifest);
 					const confirmed = await ctx.ui.confirm(
 						`Save and trust workflow '${params.name}'?`,
-						`Scope: ${scope}\nSHA-256: ${reviewedDraft.hash}\nDestination becomes a reusable slash command. Trust is bound to these exact reviewed source bytes.`,
+						`Scope: ${scope}\nSHA-256: ${reviewedDraft.hash}\nThe saved definition remains reusable through the Workbench dynamic route. Trust is bound to these exact reviewed source bytes.`,
 					);
 					if (!confirmed) throw new Error("Workflow save cancelled.");
 					const saved = current.store.saveDraft(params.name, scope, params.overwrite ?? false);
 					current.store.trust(saved);
-					const commandRegistered = registerDirectCommand(saved.name);
-					return { content: [{ type: "text", text: `Saved and trusted ${scope} workflow '${saved.name}'. ${commandRegistered ? `Command: /${saved.name}` : `A command named /${saved.name} already exists; use /workflow run ${saved.name}.`}\n${saved.path}` }], details: { source: saved, commandRegistered } };
+					return { content: [{ type: "text", text: `Saved and trusted ${scope} workflow '${saved.name}'. Run it through /workbench dynamic or workflow_run.\n${saved.path}` }], details: { source: saved } };
 				}
 				case "delete": {
 					if (!params.name || !params.scope) throw new Error("workflow_control delete requires name and scope.");
@@ -533,132 +494,6 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		renderCall(args, theme) {
 			return new Text(`${theme.fg("toolTitle", theme.bold("workflow "))}${theme.fg("accent", args.action)}`, 0, 0);
 		},
-	});
-
-	pi.registerCommand("workflow", {
-		description: "Dynamic workflows: /workflow run|status|pause|resume|stop|save|delete ...",
-		handler: async (args, ctx) => {
-			const raw = args.trim();
-			const parsed = raw.match(/^(\S+)(?:\s+(\S+))?(?:\s+([\s\S]*))?$/);
-			const verb = parsed?.[1] ?? "status";
-			const target = parsed?.[2];
-			const tail = parsed?.[3] ?? "";
-			try {
-				const current = requireRuntime(ctx);
-				if (verb === "run") {
-					if (!target) throw new Error("Usage: /workflow run <name> [JSON or request text]");
-					const { started } = await startNamed(target, commandInput(tail), true, ctx);
-					ctx.ui.notify(`Workflow started: ${started.id}`, "info");
-					return;
-				}
-				if (verb === "status") {
-					const run = current.manager.get(target);
-					ctx.ui.notify(run ? formatSnapshot(run) : "No workflow run found.", run ? "info" : "warning");
-					return;
-				}
-				if (verb === "pause" || verb === "resume" || verb === "stop") {
-					const run = verb === "pause" ? current.manager.pause(target) : verb === "resume" ? current.manager.resume(target) : current.manager.stop(target);
-					ctx.ui.notify(formatSnapshot(run), "info");
-					return;
-				}
-				if (verb === "save") {
-					if (!target) throw new Error("Usage: /workflow save <name> [user|project]");
-					const scope = tail.trim() === "project" ? "project" : "user";
-					if (scope === "project" && !ctx.isProjectTrusted()) throw new Error("Project is not trusted.");
-					const draft = current.store.resolve(target);
-					if (draft.scope !== "draft") throw new Error(`'${target}' is not a session draft.`);
-					const reviewedText = await ctx.ui.editor(`Review source before saving '${target}'`, draft.source);
-					if (reviewedText === undefined) return;
-					const reviewedSource = reviewedText.endsWith("\n") ? reviewedText : `${reviewedText}\n`;
-					const reviewedCompiled = compileWorkflowSource(reviewedSource, current.config.defaultSize);
-					if (reviewedCompiled.manifest.name !== target) throw new Error(`Reviewed source defines '${reviewedCompiled.manifest.name}', not '${target}'.`);
-					const reviewedDraft = current.store.stage(target, reviewedSource, reviewedCompiled.manifest);
-					const ok = await ctx.ui.confirm(`Save and trust '${target}'?`, `Scope: ${scope}\nSHA-256: ${reviewedDraft.hash}`);
-					if (!ok) return;
-					const saved = current.store.saveDraft(target, scope, false);
-					current.store.trust(saved);
-					const commandRegistered = registerDirectCommand(saved.name);
-					ctx.ui.notify(commandRegistered ? `Saved: /${saved.name}` : `Saved. /${saved.name} is already taken; use /workflow run ${saved.name}.`, commandRegistered ? "info" : "warning");
-					return;
-				}
-				if (verb === "delete") {
-					if (!target) throw new Error("Usage: /workflow delete <name> [user|project]");
-					const scope = tail.trim() === "project" ? "project" : "user";
-					if (scope === "project" && !ctx.isProjectTrusted()) throw new Error("Project is not trusted.");
-					const ok = await ctx.ui.confirm(`Delete ${scope} workflow '${target}'?`, "Prior run artifacts are retained. The direct slash command disappears after /reload.");
-					if (!ok) return;
-					const removed = current.store.deleteSaved(target, scope);
-					ctx.ui.notify(removed ? `Deleted ${scope} workflow '${target}'. Run /reload to remove its direct command.` : `No ${scope} workflow '${target}' existed.`, removed ? "info" : "warning");
-					return;
-				}
-				throw new Error(`Unknown workflow command '${verb}'.`);
-			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-			}
-		},
-	});
-
-	pi.registerCommand("workflows", {
-		description: "Inspect saved workflows and current-session workflow runs",
-		handler: async (_args, ctx) => {
-			const current = requireRuntime(ctx);
-			const sources = current.store.list();
-			const runs = current.manager.list();
-			if (ctx.mode !== "tui") {
-				process.stdout.write(`${[
-					...sources.map(formatWorkflow),
-					...runs.map(formatSnapshot),
-				].join("\n\n")}\n`);
-				return;
-			}
-			const labels = [
-				...runs.map((run) => `RUN  ${run.id} · ${run.name} [${run.state}]`),
-				...sources.map((source) => `FLOW ${source.name} [${source.scope}] · ${source.manifest.description}`),
-			];
-			if (labels.length === 0) {
-				ctx.ui.notify("No workflows or current-session runs.", "info");
-				return;
-			}
-			const selected = await ctx.ui.select("Dynamic workflows", labels);
-			if (!selected) return;
-			if (selected.startsWith("RUN  ")) {
-				const id = selected.slice(5).split(" · ", 1)[0]!;
-				const run = current.manager.get(id);
-				if (run) await ctx.ui.select(formatSnapshot(run), ["Close"]);
-				return;
-			}
-			const name = selected.slice(5).split(" ", 1)[0]!;
-			const source = current.store.resolve(name);
-			const action = await ctx.ui.select(formatWorkflow(source), ["Run in background", "Review source", "Cancel"]);
-			if (action === "Review source") await ctx.ui.editor(`Workflow source: ${name}`, fs.readFileSync(source.path, "utf8"));
-			if (action === "Run in background") {
-				const { started } = await startNamed(name, {}, true, ctx);
-				ctx.ui.notify(`Workflow started: ${started.id}`, "info");
-			}
-		},
-	});
-
-	pi.registerCommand("ultracode", {
-		description: "Ask Pi to create and run a bounded dynamic workflow: /ultracode <task>",
-		handler: async (args, ctx) => {
-			if (!args.trim()) {
-				ctx.ui.notify("Usage: /ultracode <task>", "warning");
-				return;
-			}
-			const prompt = `Use the dynamic-workflows extension for this request. Create a bounded small workflow with workflow_create, then call workflow_run so I can review and approve it. Prefer read-only agents and explicit verifier phases. Task:\n\n${args.trim()}`;
-			if (ctx.isIdle()) pi.sendUserMessage(prompt);
-			else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-		},
-	});
-
-	pi.on("input", (event) => {
-		if (event.source === "extension") return { action: "continue" as const };
-		const match = event.text.match(/^\s*ultracode\s*:\s*([\s\S]+)$/i);
-		if (!match) return { action: "continue" as const };
-		return {
-			action: "transform" as const,
-			text: `Use the dynamic-workflows extension for this request. Create a bounded small workflow with workflow_create, then call workflow_run for human review and approval. Prefer read-only fanout and independent verification. Task:\n\n${match[1]!.trim()}`,
-		};
 	});
 
 	pi.on("session_start", async (_event, ctx) => {

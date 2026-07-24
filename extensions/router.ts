@@ -2,13 +2,20 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { WorkbenchConfig } from "./core/config.ts";
-import { ONE_OFF_AGENTS, resolveOneOffRoute, SHIPYARD_MODES, WORKBENCH_MODES, type WorkbenchMode } from "./core/routing.ts";
-import { runIdFromSpawnReply, type SubagentRpcClient } from "./core/subagent-rpc.ts";
+import { isChildSession } from "./core/env.ts";
+import { beginGuardedSpawn } from "./core/guarded-spawn.ts";
+import { textResult } from "./core/result.ts";
+import {
+	isShipyardMode,
+	routeCategory,
+	resolveOneOffRoute,
+	SHIPYARD_WORKFLOW_NAMES,
+	WORKBENCH_MODES,
+	type WorkbenchMode,
+} from "./core/routing.ts";
+import type { SubagentRpcClient } from "./core/subagent-rpc.ts";
 import type { WriterCoordinator } from "./core/writer-coordinator.ts";
 import type { ShipyardService } from "./shipyard/index.ts";
-import type { WorkflowName } from "./shipyard/workflow-names.ts";
-
-const CHILD_ENV = "PI_SUBAGENT_CHILD";
 
 const Params = Type.Object({
 	mode: StringEnum(WORKBENCH_MODES),
@@ -24,14 +31,8 @@ export interface RegisterRouterOptions {
 	rpc: SubagentRpcClient;
 }
 
-function textResult(text: string, details: Record<string, unknown> = {}) {
-	return { content: [{ type: "text" as const, text }], details };
-}
-
-function workflowName(mode: WorkbenchMode): WorkflowName {
-	if (mode === "explore" || mode === "debug" || mode === "fast" || mode === "review" || mode === "security" || mode === "ui" || mode === "compact" || mode === "deliver" || mode === "ship") return mode;
-	throw new Error(`Workbench mode '${mode}' is not a Shipyard workflow.`);
-}
+const ONE_OFF_MODES = WORKBENCH_MODES.filter((mode) => routeCategory(mode) === "one-off");
+const ROUTE_LIST = WORKBENCH_MODES.filter((mode) => mode !== "status").join(", ");
 
 function statusText(options: RegisterRouterOptions): string {
 	const leases = options.writerCoordinator.list();
@@ -44,12 +45,12 @@ function statusText(options: RegisterRouterOptions): string {
 		`- Active writer leases: ${leases.length}`,
 		...leases.map((lease) => `  - ${lease.cwd}: ${lease.owner}${lease.runId ? ` (${lease.runId})` : ""}${lease.uncertain ? " [uncertain]" : ""}`),
 		"",
-		"Routes: quick, deep, plan, implement, review-oneoff, explore, debug, fast, review, security, ui, compact, deliver, ship, team, dynamic.",
+		`Routes: ${ROUTE_LIST}.`,
 	].join("\n");
 }
 
 export default function registerRouter(pi: ExtensionAPI, options: RegisterRouterOptions): void {
-	if (process.env[CHILD_ENV] === "1") return;
+	if (isChildSession()) return;
 	const rpc = options.rpc;
 
 	async function spawnOneOff(
@@ -61,43 +62,31 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		signal?: AbortSignal,
 	) {
 		const route = resolveOneOffRoute(mode, agentOverride);
-		const agent = route.agent;
-		const writerLease = route.capability === "writer"
-			? options.writerCoordinator.acquire(ctx.cwd, `workbench:${mode}:${agent}`)
-			: undefined;
-		const ping = await rpc.request("ping", {}, signal).catch((error) => {
-			options.writerCoordinator.release(writerLease?.token);
-			throw error;
-		});
-		if (!ping.success) {
-			options.writerCoordinator.release(writerLease?.token);
-			throw new Error(`pi-subagents RPC unavailable: ${ping.error?.message ?? "ping failed"}.`);
-		}
-		const reply = await rpc.request("spawn", {
-			agent,
-			task,
+		const guard = await beginGuardedSpawn({
+			rpc,
+			writerCoordinator: options.writerCoordinator,
 			cwd: ctx.cwd,
-			context: mode === "implement" ? "fork" : "fresh",
-			async: true,
-			clarify: false,
-			artifacts: true,
-			...(model ? { model } : {}),
-		}, signal).catch((error) => {
-			options.writerCoordinator.markUncertain(writerLease?.token);
-			throw error;
+			owner: `workbench:${mode}:${route.agent}`,
+			writeCapable: route.capability === "writer",
+			label: "Workbench launch",
+			signal,
 		});
-		if (!reply.success) {
-			options.writerCoordinator.release(writerLease?.token);
-			throw new Error(`Workbench launch failed: ${reply.error?.message ?? "unknown RPC error"}`);
-		}
-		const runId = runIdFromSpawnReply(reply);
-		if (writerLease) {
-			if (runId) options.writerCoordinator.attachRun(writerLease.token, runId);
-			else options.writerCoordinator.markUncertain(writerLease.token);
-		}
+		const { reply, runId } = await guard.spawn({
+			params: {
+				agent: route.agent,
+				task,
+				cwd: ctx.cwd,
+				context: mode === "implement" ? "fork" : "fresh",
+				async: true,
+				clarify: false,
+				artifacts: true,
+				...(model ? { model } : {}),
+			},
+			signal,
+		});
 		return {
-			message: `${reply.data?.text?.trim() || `Launched ${agent}.`}${runId ? `\nRun: ${runId}` : ""}`,
-			agent,
+			message: `${reply.data?.text?.trim() || `Launched ${route.agent}.`}${runId ? `\nRun: ${runId}` : ""}`,
+			agent: route.agent,
 			runId: runId ?? null,
 			rpc: reply.data ?? null,
 		};
@@ -111,16 +100,18 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		model?: string,
 		signal?: AbortSignal,
 	) {
-		if (mode === "status") return { message: statusText(options), mode, nextAction: null };
+		const category = routeCategory(mode);
+		if (category === "status") return { message: statusText(options), mode, nextAction: null };
 		const target = task?.trim();
 		if (!target) throw new Error(`Workbench mode '${mode}' requires a task.`);
-		if (ONE_OFF_AGENTS[mode]) return { mode, ...(await spawnOneOff(ctx, mode, target, agent, model, signal)), nextAction: null };
-		if (SHIPYARD_MODES.has(mode)) {
+		if (category === "one-off") return { mode, ...(await spawnOneOff(ctx, mode, target, agent, model, signal)), nextAction: null };
+		if (category === "shipyard") {
 			if (!options.shipyard || !options.config.modules.shipyard) throw new Error("Shipyard is disabled in Pi Workbench config.");
-			const launched = await options.shipyard.workflows.spawn(ctx, workflowName(mode), target, signal);
+			if (!isShipyardMode(mode)) throw new Error(`Workbench mode '${mode}' is not a Shipyard workflow.`);
+			const launched = await options.shipyard.workflows.spawn(ctx, mode, target, signal);
 			return { mode, ...launched, nextAction: null };
 		}
-		if (mode === "team") {
+		if (category === "team") {
 			if (!options.config.modules.agentTeams) throw new Error("Agent Teams is disabled in Pi Workbench config.");
 			return {
 				mode,
@@ -128,14 +119,14 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 				nextAction: { tool: "team_create", args: { goal: target } },
 			};
 		}
-		if (mode === "dynamic") {
+		if (category === "dynamic") {
 			if (!options.config.modules.dynamicWorkflows) {
 				throw new Error("Dynamic Workflows is experimental and disabled. Enable modules.dynamicWorkflows in ~/.pi/agent/extensions/pi-workbench/config.json, then /reload.");
 			}
 			return {
 				mode,
-				message: "Dynamic route selected. Author a bounded read-only workflow with workflow_create, then call workflow_run for exact-source human approval.",
-				nextAction: { tool: "workflow_create", task: target },
+				message: "Dynamic route selected. Use workflow_control for lifecycle or saved-definition requests; otherwise author a bounded read-only workflow with workflow_create, then call workflow_run for exact-source human approval.",
+				nextAction: { tools: ["workflow_control", "workflow_create", "workflow_run"], task: target },
 			};
 		}
 		throw new Error(`Unsupported Workbench mode: ${mode}`);
@@ -159,8 +150,8 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 
 	const HELP = [
 		"/workbench [status]",
-		"/workbench <quick|deep|plan|implement|review-oneoff> <task>",
-		"/workbench <explore|debug|fast|review|security|ui|compact|deliver|ship> <task>",
+		`/workbench <${ONE_OFF_MODES.join("|")}> <task>`,
+		`/workbench <${SHIPYARD_WORKFLOW_NAMES.join("|")}> <task>`,
 		"/workbench team <goal>",
 		"/workbench dynamic <task>  (experimental; disabled by default)",
 		"/workbench release-writer  (manual recovery after checking the active run)",
@@ -189,7 +180,7 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 				if (!target) throw new Error(`Workbench mode '${mode}' requires a task.`);
 				const prompt = mode === "team"
 					? `Use Agent Teams for this goal. Create one team, partition 2-5 separable tasks, prefer read-only scouts, and allow only one writer in this cwd. Goal:\n\n${target}`
-					: `Use Dynamic Workflows for this task. Create a bounded read-only workflow, then call workflow_run for exact-source approval. Task:\n\n${target}`;
+					: `Use Workbench Dynamic mode for this request. If it concerns an existing run or saved definition, use workflow_control. Otherwise create a bounded read-only workflow with workflow_create, then call workflow_run for exact-source approval. Request:\n\n${target}`;
 				if (ctx.isIdle()) pi.sendUserMessage(prompt);
 				else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 				return;

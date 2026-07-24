@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
+// Type-only import: erased at runtime, so Node's strip-types runner never
+// loads pi-subagents' node_modules TypeScript, while tsc drift-checks the
+// response shape against the public pi-subagents/delegation contract. The
+// event-name literals below are guarded by scripts/verify-runtime.mjs.
+import type { SubagentDelegationResponse } from "pi-subagents/delegation";
 import type { DelegationProgress, WorkflowAgentResult, WorkflowAgentTask } from "./types.ts";
 
+// Mirrors pi-subagents' public delegation contract (src/api/delegation.ts):
+// SUBAGENT_DELEGATION_PROTOCOL_VERSION and the SUBAGENT_DELEGATION_*_EVENT
+// constants. Verify against upstream with npm run verify:runtime.
 const PROTOCOL_VERSION = 1;
 const REQUEST_EVENT = "prompt-template:subagent:request";
 const STARTED_EVENT = "prompt-template:subagent:started";
@@ -10,10 +19,8 @@ const CANCEL_EVENT = "prompt-template:subagent:cancel";
 const START_ACK_TIMEOUT_MS = 10_000;
 const CANCEL_ACK_TIMEOUT_MS = 10_000;
 
-export interface WorkflowEventBus {
-	on(event: string, handler: (payload: unknown) => void): (() => void) | void;
-	emit(event: string, payload: unknown): void;
-}
+/** @deprecated Alias kept for existing imports; pi's public EventBus is the canonical type. */
+export type WorkflowEventBus = EventBus;
 
 export interface DelegationRunOptions {
 	cwd: string;
@@ -23,22 +30,7 @@ export interface DelegationRunOptions {
 	onProgress?: (progress: DelegationProgress) => void;
 }
 
-interface VersionedResponse {
-	version: number;
-	requestId: string;
-	status: WorkflowAgentResult["status"] | "turn_budget_exhausted" | "tool_budget_exhausted" | "acceptance_failed" | "invalid_request" | "unavailable_context";
-	error?: string;
-	agent?: string;
-	model?: string;
-	output?: string;
-	outputPath?: string;
-	sessionFile?: string;
-	turns?: number;
-	toolCount?: number;
-	durationMs?: number;
-	tokens?: number;
-	warnings?: string[];
-}
+type VersionedResponse = SubagentDelegationResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -57,11 +49,11 @@ function removeListener(unsubscribe: (() => void) | void): void {
 }
 
 export class DelegationClient {
-	readonly #events: WorkflowEventBus;
+	readonly #events: EventBus;
 	#disposed = false;
 	#active = new Set<{ cancel: (reason?: string) => void; force: (reason: string) => void }>();
 
-	constructor(events: WorkflowEventBus) {
+	constructor(events: EventBus) {
 		this.#events = events;
 	}
 
@@ -132,8 +124,7 @@ export class DelegationClient {
 				acknowledge();
 				settled = true;
 				cleanup();
-				const response = payload as unknown as VersionedResponse;
-				resolve({
+				const response = payload as unknown as VersionedResponse;				resolve({
 					agent: response.agent ?? task.agent,
 					status: mapStatus(response.status),
 					output: response.output ?? "",

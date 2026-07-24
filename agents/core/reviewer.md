@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 skills: shipyard-bug-hunting, shipyard-validation
+skillPath: ../../skills
 defaultContext: fresh
 acceptanceRole: read-only
 acceptance: {"level":"none","reason":"Independent review is read-only; findings are returned inline."}

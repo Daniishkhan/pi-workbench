@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 skills: shipyard-delivery, shipyard-validation, shipyard-review-findings
+skillPath: ../../skills
 defaultContext: fresh
 acceptanceRole: writer
 ---

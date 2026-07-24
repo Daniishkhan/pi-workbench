@@ -31,4 +31,19 @@ for (const contract of [
 ]) {
 	if (!rpcSource.includes(contract)) throw new Error(`pi-subagents public RPC compatibility check failed: ${contract}`);
 }
+const delegationSource = readFileSync(path.join(runtimeRoot, "src", "api", "delegation.ts"), "utf8");
+for (const contract of [
+	"SUBAGENT_DELEGATION_PROTOCOL_VERSION = 1",
+	'SUBAGENT_DELEGATION_REQUEST_EVENT = "prompt-template:subagent:request"',
+	'SUBAGENT_DELEGATION_STARTED_EVENT = "prompt-template:subagent:started"',
+	'SUBAGENT_DELEGATION_UPDATE_EVENT = "prompt-template:subagent:update"',
+	'SUBAGENT_DELEGATION_RESPONSE_EVENT = "prompt-template:subagent:response"',
+	'SUBAGENT_DELEGATION_CANCEL_EVENT = "prompt-template:subagent:cancel"',
+]) {
+	if (!delegationSource.includes(contract)) throw new Error(`pi-subagents public delegation compatibility check failed: ${contract}`);
+}
+const sharedTypesSource = readFileSync(path.join(runtimeRoot, "src", "shared", "types.ts"), "utf8");
+if (!sharedTypesSource.includes('SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete"')) {
+	throw new Error("pi-subagents async-complete event contract check failed.");
+}
 console.log(`Verified pi-subagents upstream main snapshot ${expectedCommit.slice(0, 12)} (${runtimePackage.version}, ${locked.integrity.slice(0, 24)}…).`);

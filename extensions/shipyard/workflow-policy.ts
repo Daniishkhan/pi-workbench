@@ -1,32 +1,13 @@
+/**
+ * Shipyard chain preparation: default task resolution (from the workflow
+ * catalog), private output materialization, and capability-checked agent
+ * bindings. Findings-ledger role policy lives in findings-policy.ts.
+ */
+
 import path from "node:path";
 import { capabilityForAgent } from "../core/role-policy.ts";
-import type { WorkflowName } from "./workflow-names.ts";
 
-function defaultWorkflowTask(name: WorkflowName): string {
-	switch (name) {
-		case "explore":
-			return "Map this repository's architecture, entry points, primary flows, module boundaries, and test harness for future codebase questions.";
-		case "review":
-			return "Review the current worktree diff against the user request, repository instructions, and existing behavior.";
-		case "fast":
-			return "Run a focused bug review of the current worktree diff.";
-		case "security":
-			return "Review the current worktree diff for correctness and security boundary failures.";
-		case "ui":
-			return "Review the current UI worktree diff for behavior, state-flow, accessibility, interaction, and visual regressions.";
-		case "ship":
-			return "Review, fix, validate, and prepare the current worktree changes for shipment. Do not commit or push.";
-		case "debug":
-		case "compact":
-		case "deliver":
-			throw new Error(`Shipyard ${name} requires a non-empty task.`);
-	}
-}
-
-export function resolveWorkflowTask(name: WorkflowName, task?: string): string {
-	const target = task?.trim();
-	return target || defaultWorkflowTask(name);
-}
+export { resolveWorkflowTask } from "./workflow-catalog.ts";
 
 function privateOutputPath(artifactsDir: string, output: string): string {
 	if (!output.trim() || path.isAbsolute(output) || path.posix.isAbsolute(output) || path.win32.isAbsolute(output)) {
