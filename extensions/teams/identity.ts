@@ -21,15 +21,22 @@ export interface TeamsIdentity {
 }
 
 export function createTeamsIdentity(runtime: TeamsRuntime, runIdOverride?: string): TeamsIdentity {
+	let memoizedIdentity: MemberIdentity | null = null;
+
 	/** Resolve this child session's team membership from its run id, with a
 	 * short retry: the lead writes the runId into the team config after the
-	 * spawn RPC reply, which can land after this process started. */
+	 * spawn RPC reply, which can land after this process started. A resolved
+	 * identity is memoized — it cannot change within one child process. */
 	async function findOwnIdentity(): Promise<MemberIdentity | null> {
+		if (memoizedIdentity) return memoizedIdentity;
 		const runId = runIdOverride?.trim() || process.env[RUN_ID_ENV]?.trim();
 		if (!runId) return null;
 		for (let attempt = 0; attempt < 8; attempt++) {
 			const found = findMemberByRunId(runId);
-			if (found) return found;
+			if (found) {
+				memoizedIdentity = found;
+				return found;
+			}
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
 		return null;

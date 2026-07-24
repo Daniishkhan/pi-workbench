@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "description": "Recommended local model fleet. Agent frontmatter is model-agnostic; merge these overrides into settings.subagents.agentOverrides.",
   "agentOverrides": {
-    "pi-agent-teams.scout": {
+    "pi-workbench.teams-scout": {
       "model": "google-vertex/gemini-3.6-flash",
       "thinking": "low"
     },
-    "pi-agent-teams.teammate": {
+    "pi-workbench.teams-teammate": {
       "model": "openai-codex/gpt-5.6-terra",
       "thinking": "xhigh",
       "fallbackModels": [

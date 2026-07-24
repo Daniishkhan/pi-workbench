@@ -94,9 +94,11 @@ Humans use `/workbench` or `/work`:
 /workbench dynamic <task>
 ```
 
+Use `/workbench plan grill: <target>` when the planner should pressure-test the proposal through a bounded, one-question-at-a-time supervisor interview before returning the hardened plan. Ordinary `plan` requests remain non-interactive.
+
 Models use `workbench_route` with the same explicit modes. There is no keyword-based auto-router: routing is deterministic and visible.
 
-Workbench registers no module-specific orchestration commands. Legacy `/shipyard`, `/team`, `/workflow`, `/workflows`, `/ultracode`, and saved-workflow slash commands are not exposed. Supporting `team_*` and `workflow_*` tools are operational primitives used only after `workbench_route` selects those modes; Shipyard launches directly through the router's internal service.
+Workbench registers no module-specific orchestration commands. Legacy `/shipyard`, `/team`, `/workflow`, `/workflows`, `/ultracode`, and saved-workflow slash commands are not exposed. Supporting `team_*` and `dynamic_*` tools are operational primitives used only after `workbench_route` selects those modes; Shipyard launches directly through the router's internal service.
 
 ## Selection policy
 
@@ -129,6 +131,7 @@ Defaults:
   "shipyard": {
     "agentBindings": {}
   },
+  "dynamic": {},
   "writerGuard": {
     "enabled": true
   }
@@ -136,6 +139,8 @@ Defaults:
 ```
 
 Changes take effect after `/reload`.
+
+The optional `dynamic` object carries Dynamic Workflows policy (`defaultSize`, `sizeLimits`, `maxConcurrency`, `maxRuntimeMs`, `maxIntermediateBytes`, `maxResultBytes`, `allowUnrestricted`, `unrestrictedSafetyCap`, `allowUnattendedTrusted`, `approvalMode`). The legacy standalone `~/.pi/agent/extensions/dynamic-workflows/config.json` is still read as a fallback with a deprecation warning when the `dynamic` section is empty.
 
 ### Shipyard role binding
 
@@ -179,8 +184,10 @@ General package-scoped roles:
 Compatibility namespaces remain unchanged:
 
 - `pi-shipyard.*`
-- `pi-agent-teams.scout`
-- `pi-agent-teams.teammate`
+- `pi-workbench.teams-scout`
+- `pi-workbench.teams-teammate`
+
+(Agent Teams roles moved from the retired `pi-agent-teams.*` namespace; the settings migration rewrites those `agentOverrides` keys automatically.)
 
 No package agent registers as bare `scout`, so it cannot unexpectedly shadow the clean builtin.
 
@@ -211,35 +218,40 @@ This guard covers Workbench-managed launches, not arbitrary direct calls to anot
 
 ## Dynamic Workflows
 
-Dynamic Workflows are disabled by default. When enabled they retain exact-source editing, hash-bound approval, budgets, state artifacts, structured outputs, bounded loops, and branching. The reviewed bytes—not an earlier draft—are compiled and executed. Saved definitions remain reusable through the Workbench dynamic route and `workflow_run`; they do not create slash commands.
+Dynamic Workflows are disabled by default. When enabled they retain exact-source editing, hash-bound approval, budgets, state artifacts, structured outputs, bounded loops, and branching. The reviewed bytes—not an earlier draft—are compiled and executed. Saved definitions remain reusable through the Workbench dynamic route and `dynamic_run`; they do not create slash commands.
 
 Compiler provenance checks reject forged nodes/references, unsafe schema shapes, non-finite values, undeclared skills/acceptance payloads, future or scope-invalid references, and nested phases. Input, individual output, aggregate intermediate values, and the selected final result all have hard limits. Interrupted statuses remain inspectable and are reconciled as failed after reload.
 
 Workbench removes the old unversioned parallel batch bridge. Read-only fanout uses concurrent versioned single-agent delegation through ephemeral, permission-restricted runtime agents. Parallel writers are rejected—even when old source requests `worktree:true`—because the foreground delegation protocol cannot safely create isolated worktrees. Use one serialized writer followed by read-only verification. Cancellation holds the durable writer lease until the child returns a terminal acknowledgement or the bounded shutdown grace expires.
 
-Existing dynamic state remains in its original locations:
+Dynamic state lives under the unified Workbench state root:
 
 ```text
-~/.pi/agent/workflows/
-~/.pi/agent/workflow-drafts/
-~/.pi/agent/workflow-runs/
-~/.pi/agent/workflow-trust.json
+~/.pi/agent/workbench/dynamic/saved/
+~/.pi/agent/workbench/dynamic/drafts/
+~/.pi/agent/workbench/dynamic/runs/
+~/.pi/agent/workbench/dynamic/trust.json
 ```
 
-The existing limits config remains:
+Pre-unification locations (`~/.pi/agent/workflows/`, `workflow-drafts/`, `workflow-runs/`, `workflow-trust.json`) are still read as a fallback; new writes always go to the unified root.
+
+Dynamic policy lives in the `dynamic` section of the Workbench config (see Configuration); the legacy `~/.pi/agent/extensions/dynamic-workflows/config.json` is read as a deprecated fallback only.
+
+## State locations
+
+All Workbench state shares one root:
 
 ```text
-~/.pi/agent/extensions/dynamic-workflows/config.json
+~/.pi/agent/workbench/
+  shipyard/runs/       findings ledgers + launch journals
+  shipyard/context/    reusable repository context cache
+  teams/               Agent Teams shared state
+  dynamic/             saved definitions, drafts, run artifacts, trust
+  writer-leases/       one-writer-per-worktree leases
 ```
 
-## Preserved state
+Legacy locations (`~/.pi/agent/shipyard-runs/`, `shipyard-context/`, `teams/`, and the dynamic paths above) remain readable as fallbacks, so existing state keeps working without migration. Writes always go to the unified root. `PI_WORKBENCH_TEAMS_ROOT` overrides the teams root (the retired `PI_AGENT_TEAMS_ROOT` is honored as a fallback).
 
-Workbench continues to use the existing locations:
-
-- Shipyard runs: `~/.pi/agent/shipyard-runs/`
-- Shipyard context: `~/.pi/agent/shipyard-context/`
-- Teams: `~/.pi/agent/teams/`
-- Dynamic workflow state: locations above
 - pi-subagents async artifacts: owned entirely by `pi-subagents`
 
 No state migration or deletion is required.

@@ -2,7 +2,7 @@
 name: review-synthesizer
 package: pi-shipyard
 description: Adjudicates the findings ledger and reviewer receipts into a compact, actionable review verdict
-tools: read, grep, find, ls, review_findings, shipyard_repo
+tools: read, grep, find, ls, shipyard_findings, shipyard_repo
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

@@ -5,7 +5,9 @@
  * Lease lifecycle (identical for one-off roles, Shipyard workflows, and
  * write-capable teammates):
  *   1. acquire the lease (writers only), then verify RPC readiness (ping);
- *      any ping failure releases the lease;
+ *      any ping failure releases the lease. Acquire is self-healing: a
+ *      blocking lease whose run is terminal per RPC status is reaped and the
+ *      acquire retried once;
  *   2. issue the spawn request — a transport failure keeps the lease but
  *      marks it uncertain, because the launch may have been accepted;
  *   3. an RPC-level rejection releases the lease;
@@ -13,6 +15,7 @@
  *      uncertain when no run id came back) and ownership moves to the run.
  */
 
+import { classifySubagentStatusText } from "./run-lifecycle.ts";
 import { runIdFromSpawnReply, type SubagentRpcClient, type SubagentRpcReply } from "./subagent-rpc.ts";
 import type { WriterCoordinator, WriterLease } from "./writer-coordinator.ts";
 
@@ -60,11 +63,36 @@ function rpcErrorDetail(reply: SubagentRpcReply, fallback: string): string {
 	return code ? `${code}: ${message}` : message;
 }
 
+/** Acquire the writer lease with self-healing: when the blocking lease belongs
+ * to a run that pi-subagents reports as terminal, reap the orphaned lease and
+ * retry once instead of failing the launch. Active or unverifiable blockers
+ * keep the original conflict error. */
+async function acquireLease(
+	options: BeginGuardedSpawnOptions,
+	coordinator: WriterCoordinator | undefined,
+): Promise<WriterLease | undefined> {
+	if (!options.writeCapable || !coordinator) return undefined;
+	try {
+		return coordinator.acquire(options.cwd, options.owner);
+	} catch (error) {
+		const blocking = coordinator.get(options.cwd);
+		if (!blocking?.runId) throw error;
+		let state: ReturnType<typeof classifySubagentStatusText> = "unknown";
+		try {
+			const reply = await options.rpc.request("status", { id: blocking.runId }, options.signal);
+			if (reply.success) state = classifySubagentStatusText(reply.data?.text);
+		} catch {
+			state = "unknown";
+		}
+		if (state !== "terminal") throw error;
+		if (!coordinator.release(blocking.token)) throw error;
+		return coordinator.acquire(options.cwd, options.owner);
+	}
+}
+
 export async function beginGuardedSpawn(options: BeginGuardedSpawnOptions): Promise<GuardedSpawn> {
 	const coordinator = options.writerCoordinator;
-	const lease = options.writeCapable && coordinator
-		? coordinator.acquire(options.cwd, options.owner)
-		: undefined;
+	const lease = await acquireLease(options, coordinator);
 	let state: LeaseState = lease ? "held" : "none";
 	const release = () => {
 		if (state !== "held") return;

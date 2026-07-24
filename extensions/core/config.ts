@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface WorkbenchConfig {
 	modules: {
@@ -11,6 +11,10 @@ export interface WorkbenchConfig {
 	shipyard: {
 		agentBindings: Record<string, string>;
 	};
+	/** Raw Dynamic Workflows policy section. Resolved by dynamic/config.ts into
+	 * ResolvedDynamicWorkflowsConfig; core intentionally stays decoupled from
+	 * the dynamic module's types. */
+	dynamic: Record<string, unknown>;
 	writerGuard: {
 		enabled: boolean;
 	};
@@ -25,6 +29,7 @@ export const DEFAULT_WORKBENCH_CONFIG: WorkbenchConfig = {
 	shipyard: {
 		agentBindings: {},
 	},
+	dynamic: {},
 	writerGuard: {
 		enabled: true,
 	},
@@ -55,21 +60,18 @@ export function resolveWorkbenchConfig(input: unknown): WorkbenchConfig {
 			dynamicWorkflows: boolean(modules.dynamicWorkflows, DEFAULT_WORKBENCH_CONFIG.modules.dynamicWorkflows),
 		},
 		shipyard: { agentBindings },
+		dynamic: record(root.dynamic),
 		writerGuard: {
 			enabled: boolean(writerGuard.enabled, DEFAULT_WORKBENCH_CONFIG.writerGuard.enabled),
 		},
 	};
 }
 
-export function defaultAgentDir(): string {
-	return path.resolve(process.env.PI_CODING_AGENT_DIR?.trim() || path.join(os.homedir(), ".pi", "agent"));
-}
-
-export function workbenchConfigPath(agentDir = defaultAgentDir()): string {
+export function workbenchConfigPath(agentDir = getAgentDir()): string {
 	return path.join(agentDir, "extensions", "pi-workbench", "config.json");
 }
 
-export function loadWorkbenchConfig(agentDir = defaultAgentDir()): WorkbenchConfig {
+export function loadWorkbenchConfig(agentDir = getAgentDir()): WorkbenchConfig {
 	const file = workbenchConfigPath(agentDir);
 	try {
 		return resolveWorkbenchConfig(JSON.parse(fs.readFileSync(file, "utf8")));

@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerSubagents from "pi-subagents";
+import { registerBackgroundWorkProvider } from "pi-subagents/background-work";
 import { loadWorkbenchConfig } from "./core/config.ts";
 import { isChildSession } from "./core/env.ts";
 import { runIdFromAsyncComplete } from "./core/run-lifecycle.ts";
@@ -45,7 +46,11 @@ export default function piWorkbench(pi: ExtensionAPI): void {
 	const discoveredSkills = [SUBAGENTS_SKILL];
 	if (!isChild && rpc) {
 		if (config.modules.dynamicWorkflows) {
-			registerDynamicWorkflows(pi, { writerCoordinator });
+			registerDynamicWorkflows(pi, {
+				writerCoordinator,
+				dynamicConfig: config.dynamic,
+				registerBackgroundWork: (provider) => registerBackgroundWorkProvider(provider),
+			});
 			discoveredSkills.push(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../skills/dynamic-workflows"));
 		}
 		registerRouter(pi, { config, shipyard, writerCoordinator, rpc });

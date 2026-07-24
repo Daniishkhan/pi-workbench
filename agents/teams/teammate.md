@@ -1,6 +1,6 @@
 ---
-name: teammate
-package: pi-agent-teams
+name: teams-teammate
+package: pi-workbench
 description: Agent Teams teammate. An independent worker spawned by a team lead; it owns a slice of work, claims shared tasks, and coordinates with peers and the lead through team tools (mailbox, task list, notes) instead of only reporting back.
 tools: read, bash, edit, write, grep, find, ls, team_send, team_inbox, team_tasks, team_status, team_peers, team_notes
 defaultContext: fresh

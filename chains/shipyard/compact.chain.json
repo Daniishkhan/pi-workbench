@@ -1,5 +1,5 @@
 {
-  "name": "deliver-compact",
+  "name": "compact",
   "package": "pi-shipyard",
   "description": "Compact delivery for well-specified slices: implement, two-angle independent review, falsification, verified fixes, and a readiness handoff.",
   "chain": [
@@ -21,7 +21,7 @@
           "agent": "pi-shipyard.contract-reviewer",
           "label": "Contract review",
           "as": "contracts",
-          "task": "Review the slice implementation for contract/invariant defects.\n\nSlice brief: {task}\nImplementation handoff: {outputs.implementation}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the referenced artifact and inspect the actual diff/source/tests. Record concrete findings using stage `wave-1-contracts` and sourceRole `pi-shipyard.contract-reviewer`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "task": "Review the slice implementation for contract/invariant defects.\n\nSlice brief: {task}\nImplementation handoff: {outputs.implementation}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the referenced artifact and inspect the actual diff/source/tests. Record concrete findings using stage `wave-1-contracts` and sourceRole `pi-shipyard.contract-reviewer`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call shipyard_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
           "output": "review/wave-1-contracts.md",
           "outputMode": "file-only",
           "progress": false,
@@ -39,7 +39,7 @@
           "agent": "pi-shipyard.adversarial-tester",
           "label": "Adversarial review",
           "as": "adversarial",
-          "task": "Construct and execute focused counterexamples against the slice implementation.\n\nSlice brief: {task}\nImplementation handoff: {outputs.implementation}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the referenced artifact and inspect the actual diff/source/tests. Record concrete findings using stage `wave-1-adversarial` and sourceRole `pi-shipyard.adversarial-tester`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+          "task": "Construct and execute focused counterexamples against the slice implementation.\n\nSlice brief: {task}\nImplementation handoff: {outputs.implementation}\nFindings store: {{SHIPYARD_STORE}}\n\nOpen the referenced artifact and inspect the actual diff/source/tests. Record concrete findings using stage `wave-1-adversarial` and sourceRole `pi-shipyard.adversarial-tester`. Stay independent and do not edit project/source files.\n\nIndependent-wave rule: do not call shipyard_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
           "output": "review/wave-1-adversarial.md",
           "outputMode": "file-only",
           "progress": false,

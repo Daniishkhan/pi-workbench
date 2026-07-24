@@ -1,5 +1,5 @@
 /**
- * pi-agent-teams — agent teams for Pi.
+ * Agent Teams — agent teams for Pi.
  *
  * One session acts as the team lead. It spawns teammates as independent
  * pi-subagents async runs. Teammates coordinate through a shared team
@@ -353,7 +353,7 @@ export default function registerTeams(pi: ExtensionAPI, options: RegisterTeamsOp
 				role: Type.String({ description: "One-line role, e.g. 'Owns API research; no file edits'." }),
 				task: Type.String({ description: "Full initial briefing: goal, ownership boundaries, deliverables." }),
 				model: Type.Optional(Type.String({ description: "Optional model override for this teammate." })),
-				agent: Type.Optional(Type.String({ description: "Subagent definition to run as. Default pi-agent-teams.teammate (writer); pi-agent-teams.scout is a packaged read-only researcher. Custom agents must include the team_* tools in their allowlist or omit tools." })),
+				agent: Type.Optional(Type.String({ description: "Subagent definition to run as. Default pi-workbench.teams-teammate (writer); pi-workbench.teams-scout is a packaged read-only researcher. Custom agents must include the team_* tools in their allowlist or omit tools." })),
 				write: Type.Optional(Type.Boolean({ description: "Compatibility assertion only. Unknown custom agents always fail closed as writers and cannot use false; packaged roles must match their registered policy. Workbench permits one writer per Git worktree." })),
 			}),
 			async execute(_id, params, signal, _onUpdate, ctx) {

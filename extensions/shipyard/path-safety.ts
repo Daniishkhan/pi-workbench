@@ -20,21 +20,39 @@ export async function rejectSymlinkComponents(root: string, target: string): Pro
 	}
 }
 
-export async function resolveSafeStorePath(cwd: string, store: string, runsRoot: string): Promise<string> {
+function isUnderRoot(root: string, target: string): boolean {
+	const relative = path.relative(path.resolve(root), target);
+	return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+/** Resolve a findings store path below the unified runs root. Pre-unification
+ * stores below the legacy root stay readable/writable as a fallback; new runs
+ * always use the primary root. */
+export async function resolveSafeStorePath(cwd: string, store: string, runsRoot: string, legacyRunsRoot?: string): Promise<string> {
 	await mkdir(runsRoot, { recursive: true, mode: 0o700 });
-	const resolved = resolveStorePath(cwd, store, runsRoot);
-	const parts = path.relative(runsRoot, resolved).split(path.sep);
+	const candidate = resolveStorePath(cwd, store);
+	const root = legacyRunsRoot
+		&& path.resolve(legacyRunsRoot) !== path.resolve(runsRoot)
+		&& isUnderRoot(legacyRunsRoot, candidate)
+		&& !isUnderRoot(runsRoot, candidate)
+		? legacyRunsRoot
+		: runsRoot;
+	const resolved = resolveStorePath(cwd, store, root);
+	const parts = path.relative(root, resolved).split(path.sep);
 	if (
 		parts.length !== 3
 		|| !SESSION_DIR_PATTERN.test(parts[0] ?? "")
 		|| !RUN_ID_PATTERN.test(parts[1] ?? "")
 		|| parts[2] !== "findings"
 	) {
-		throw new Error(`Invalid Shipyard findings location. Expected ${runsRoot}/S-<session>/R-<run>/findings.`);
+		const accepted = root === runsRoot && legacyRunsRoot && path.resolve(legacyRunsRoot) !== path.resolve(runsRoot)
+			? `${runsRoot} (or legacy ${legacyRunsRoot})`
+			: root;
+		throw new Error(`Invalid Shipyard findings location. Expected ${accepted}/S-<session>/R-<run>/findings.`);
 	}
-	await rejectSymlinkComponents(runsRoot, resolved);
+	await rejectSymlinkComponents(root, resolved);
 	await mkdir(resolved, { recursive: true, mode: 0o700 });
-	const [rootReal, storeReal] = await Promise.all([realpath(runsRoot), realpath(resolved)]);
+	const [rootReal, storeReal] = await Promise.all([realpath(root), realpath(resolved)]);
 	const relativeReal = path.relative(rootReal, storeReal);
 	if (!relativeReal || relativeReal.startsWith("..") || path.isAbsolute(relativeReal)) {
 		throw new Error("Shipyard findings store resolves outside the trusted run root.");

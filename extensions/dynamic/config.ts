@@ -67,20 +67,62 @@ export function resolveConfig(input: DynamicWorkflowsConfig = {}): ResolvedDynam
 	};
 }
 
-export function loadConfig(agentDir: string): ResolvedDynamicWorkflowsConfig {
-	const configPath = path.join(agentDir, "extensions", "dynamic-workflows", "config.json");
+/** Legacy pre-unification config location, read only as a fallback when the
+ * unified Workbench config has no `dynamic` section. */
+export function legacyDynamicConfigPath(agentDir: string): string {
+	return path.join(agentDir, "extensions", "dynamic-workflows", "config.json");
+}
+
+function readLegacyConfig(file: string): DynamicWorkflowsConfig | undefined {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as unknown;
+		const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			throw new Error("config root must be a JSON object");
 		}
-		return resolveConfig(parsed as DynamicWorkflowsConfig);
+		return parsed as DynamicWorkflowsConfig;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-			console.error(`Failed to load dynamic-workflows config at '${configPath}':`, error);
+			console.error(`Failed to load dynamic-workflows config at '${file}':`, error);
 		}
-		return resolveConfig();
+		return undefined;
 	}
+}
+
+export interface LoadDynamicConfigResult {
+	config: ResolvedDynamicWorkflowsConfig;
+	/** Human-readable deprecation/migration warnings (legacy config in use). */
+	warnings: string[];
+}
+
+/** Resolve Dynamic Workflows policy. The unified Workbench config's `dynamic`
+ * section is the primary source; the legacy standalone
+ * extensions/dynamic-workflows/config.json is read only as a fallback and
+ * emits a deprecation warning. */
+export function loadDynamicConfig(agentDir: string, primary?: Record<string, unknown>): LoadDynamicConfigResult {
+	const legacyPath = legacyDynamicConfigPath(agentDir);
+	const hasPrimary = Boolean(primary && Object.keys(primary).length > 0);
+	if (hasPrimary) {
+		const legacy = readLegacyConfig(legacyPath);
+		const warnings = legacy
+			? [`Dynamic Workflows policy now lives in the 'dynamic' section of the Pi Workbench config; the legacy file '${legacyPath}' is ignored and can be deleted.`]
+			: [];
+		return { config: resolveConfig(primary as DynamicWorkflowsConfig), warnings };
+	}
+	const legacy = readLegacyConfig(legacyPath);
+	if (legacy) {
+		return {
+			config: resolveConfig(legacy),
+			warnings: [`Dynamic Workflows is configured by the deprecated legacy file '${legacyPath}'. Move these settings into the 'dynamic' section of the Pi Workbench config.`],
+		};
+	}
+	return { config: resolveConfig(), warnings: [] };
+}
+
+/** Back-compat wrapper: resolved config only, warnings logged. */
+export function loadConfig(agentDir: string): ResolvedDynamicWorkflowsConfig {
+	const { config, warnings } = loadDynamicConfig(agentDir);
+	for (const warning of warnings) console.error(warning);
+	return config;
 }
 
 export function resolveWorkflowPolicy(
@@ -89,7 +131,7 @@ export function resolveWorkflowPolicy(
 ): WorkflowPolicy {
 	if (manifest.size === "unrestricted" && !config.allowUnrestricted) {
 		throw new Error(
-			"This workflow requests size 'unrestricted', but allowUnrestricted is disabled in dynamic-workflows config.",
+			"This workflow requests size 'unrestricted', but allowUnrestricted is disabled in the Workbench 'dynamic' config section.",
 		);
 	}
 	const sizeCap = manifest.size === "unrestricted"

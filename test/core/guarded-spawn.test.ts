@@ -21,11 +21,16 @@ class FakeCoordinator {
 	readonly released: Array<string | undefined> = [];
 	readonly uncertain: Array<string | undefined> = [];
 	readonly attached: Array<{ token: string | undefined; runId: string | undefined }> = [];
-	failAcquire?: Error;
+	acquireFailures: Error[] = [];
+	blocking?: WriterLease;
 	acquire(cwd: string, owner: string): WriterLease {
-		if (this.failAcquire) throw this.failAcquire;
+		const failure = this.acquireFailures.shift();
+		if (failure) throw failure;
 		this.acquired.push(owner);
 		return { version: 1, token: `token-${this.acquired.length}`, cwd, owner, createdAt: Date.now(), pid: 1 };
+	}
+	get(cwd: string): WriterLease | undefined {
+		return this.blocking ? { ...this.blocking, cwd } : undefined;
 	}
 	release(token: string | undefined): boolean { this.released.push(token); return true; }
 	markUncertain(token: string | undefined): void { this.uncertain.push(token); }
@@ -152,12 +157,55 @@ test("spawn RPC-level rejection journals then releases the lease", async () => {
 test("acquire conflicts propagate before any RPC call", async () => {
 	const rpc = new FakeRpc(() => reply());
 	const coordinator = new FakeCoordinator();
-	coordinator.failAcquire = new Error("Workbench writer guard: busy");
+	coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
 	await assert.rejects(
 		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
 		/busy/,
 	);
 	assert.equal(rpc.calls.length, 0);
+});
+
+test("a terminal blocking lease is reaped and the acquire retried once", async () => {
+	const rpc = new FakeRpc((method) => method === "status"
+		? reply({ data: { text: "Run: run-old\nState: completed\n" } })
+		: reply({ data: { details: { runId: "run-new" } } }));
+	const coordinator = new FakeCoordinator();
+	coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+	coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
+	});
+	assert.deepEqual(coordinator.released, ["old-token"]);
+	assert.equal(guard.lease?.token, "token-1");
+	assert.equal(rpc.calls[0]?.method, "status");
+	assert.deepEqual(rpc.calls[0]?.params, { id: "run-old" });
+	assert.equal(rpc.calls[1]?.method, "ping");
+});
+
+test("an active or unverifiable blocking lease keeps the conflict error", async () => {
+	for (const statusText of ["State: running", "State: mysterious"]) {
+		const rpc = new FakeRpc((method) => method === "status" ? reply({ data: { text: statusText } }) : reply());
+		const coordinator = new FakeCoordinator();
+		coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+		coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
+		await assert.rejects(
+			() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
+			/busy/,
+		);
+		assert.equal(coordinator.released.length, 0);
+		assert.equal(rpc.calls.length, 1, "only the status probe may run");
+		assert.equal(rpc.calls[0]?.method, "status");
+	}
+	// A status transport failure is not terminal evidence either.
+	const rpc = new FakeRpc(() => new Error("transport down"));
+	const coordinator = new FakeCoordinator();
+	coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+	coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
+	await assert.rejects(
+		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
+		/busy/,
+	);
+	assert.equal(coordinator.released.length, 0);
 });
 
 test("discard before spawn releases; discard after success does not", async () => {

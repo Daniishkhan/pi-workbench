@@ -4,12 +4,12 @@ import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
-	getAgentDir,
 	truncateHead,
 	withFileMutationQueue,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { legacyShipyardRunsRoot, shipyardRunsRoot } from "../core/paths.ts";
 import { textResult } from "../core/result.ts";
 import {
 	addFinding,
@@ -30,8 +30,6 @@ import {
 import { authorizeFindingAction, createCapabilityRegistry, type FindingUpdateField } from "./findings-capabilities.ts";
 import { resolveSafeExportPath, resolveSafeStorePath } from "./path-safety.ts";
 import { buildReadOnlyGitArgs } from "./repo-inspection.ts";
-
-const SHIPYARD_RUNS_ROOT = path.join(getAgentDir(), "shipyard-runs");
 
 const EvidenceSchema = Type.Object({
 	path: Type.String({ minLength: 1, maxLength: 1_024, description: "Path inside the reviewed repository" }),
@@ -115,13 +113,19 @@ function formatFindingLine(finding: Awaited<ReturnType<typeof getFinding>>): str
 
 export default function registerReviewFindings(pi: ExtensionAPI) {
 	pi.registerTool({
-		name: "review_findings",
-		label: "Review Findings",
+		name: "shipyard_findings",
+		label: "Shipyard Findings",
 		description: `Maintain Shipyard's run-scoped structured review ledger. Findings are atomic evidence records with immutable provenance and optimistic revisions. Use the exact store path from the task. List/get output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+		promptSnippet: "Record and review Shipyard run-scoped findings",
+		promptGuidelines: [
+			"Use the exact store path and capability supplied in the Shipyard task; never invent or share capabilities.",
+			"Every finding needs concrete evidence (path inside the reviewed repository), a failure scenario, and a suggested fix.",
+			"Update requires the finding's current expectedRevision; list/get first when unsure.",
+		],
 		parameters: FindingsParams,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			if (signal?.aborted) throw new Error("review_findings cancelled");
-			const storePath = await resolveSafeStorePath(ctx.cwd, params.store, SHIPYARD_RUNS_ROOT);
+			if (signal?.aborted) throw new Error("shipyard_findings cancelled");
+			const storePath = await resolveSafeStorePath(ctx.cwd, params.store, shipyardRunsRoot(), legacyShipyardRunsRoot());
 			if (params.action === "init" && !params.capability?.trim()) {
 				const runId = path.basename(path.dirname(storePath));
 				const manifest = await withFileMutationQueue(storePath, () => initializeStore(storePath, { runId }));
@@ -251,6 +255,11 @@ export default function registerReviewFindings(pi: ExtensionAPI) {
 		name: "shipyard_repo",
 		label: "Shipyard Repo",
 		description: `Read-only Git inspection for Shipyard roles. Supports status, unstaged/staged/range diffs, diff summaries, changed-file lists, commit patches, ref-aware log, and line-scoped blame. Range comparisons use merge-base semantics (base...head). It accepts no arbitrary shell command and truncates output to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+		promptSnippet: "Inspect the reviewed repository with read-only git commands",
+		promptGuidelines: [
+			"Use shipyard_repo instead of shell git commands so review roles stay read-only and auditable.",
+			"Range diffs use merge-base semantics: pass base (and optional head) rather than raw rev ranges.",
+		],
 		parameters: RepoParams,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("shipyard_repo cancelled");

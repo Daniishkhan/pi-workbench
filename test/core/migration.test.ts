@@ -22,7 +22,7 @@ function fixture() {
 			"./packages/pi-agent-teams",
 			"npm:other",
 		],
-		subagents: { agentOverrides: { scout: { model: "existing/model" } } },
+		subagents: { agentOverrides: { scout: { model: "existing/model" } } as Record<string, unknown> },
 	};
 	fs.writeFileSync(settings, `${JSON.stringify(value, null, 2)}\n`);
 	fs.writeFileSync(scout, "legacy scout\n");
@@ -50,6 +50,21 @@ test("builds an exact package replacement while preserving unrelated settings an
 		() => buildMigratedSettings({ ...value, packages: ["npm:pi-subagents@0.36.0", "./packages/pi-workbench"] }, {}),
 		/unexpected standalone runtime/,
 	);
+});
+
+test("rewrites legacy agent override keys to the unified Workbench namespace", () => {
+	const { value } = fixture();
+	value.subagents.agentOverrides["pi-agent-teams.scout"] = { model: "legacy/scout" };
+	value.subagents.agentOverrides["pi-agent-teams.teammate"] = { model: "legacy/teammate", thinking: "high" };
+	const migrated = buildMigratedSettings(value, {});
+	const overrides = migrated.subagents.agentOverrides;
+	assert.equal(overrides["pi-agent-teams.scout"], undefined);
+	assert.equal(overrides["pi-agent-teams.teammate"], undefined);
+	assert.equal(overrides["pi-workbench.teams-scout"].model, "legacy/scout");
+	assert.deepEqual(overrides["pi-workbench.teams-teammate"], { model: "legacy/teammate", thinking: "high" });
+	// A user's renamed override still wins over the recommended profile.
+	const withProfile = buildMigratedSettings(value, { "pi-workbench.teams-scout": { model: "recommended/scout" } });
+	assert.equal(withProfile.subagents.agentOverrides["pi-workbench.teams-scout"].model, "legacy/scout");
 });
 
 test("applies with backups, archives the legacy scout, and rolls back safely", () => {

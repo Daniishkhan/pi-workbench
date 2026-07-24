@@ -88,11 +88,17 @@ const agentMeta = new Map();
 const CAPABILITY_FRONTMATTER_EXCEPTIONS = {
 	"pi-shipyard.shipwright": "frontmatter acceptanceRole 'writer' validates writer output; launch capability stays read-only (no edit/write tools)",
 };
+/** Documented read-only roles that may expose bash. The Agent Teams scout runs
+ * safe read-only shell commands (git log, test listings, inspection scripts)
+ * as an explicit part of its role prompt; it still has no edit/write tools. */
+const BASH_READ_ONLY_EXCEPTIONS = {
+	"pi-workbench.teams-scout": "scout role prompt restricts bash to read-only inspection commands",
+};
 for (const file of agentFiles) {
 	const fm = parseFrontmatter(file);
 	if (!fm.name) fail(`${relative(file)}: missing name`);
 	if (!fm.description) fail(`${relative(file)}: missing description`);
-	if (!fm.package || !["pi-workbench", "pi-shipyard", "pi-agent-teams"].includes(fm.package)) fail(`${relative(file)}: unexpected package namespace ${fm.package}`);
+	if (!fm.package || !["pi-workbench", "pi-shipyard"].includes(fm.package)) fail(`${relative(file)}: unexpected package namespace ${fm.package}`);
 	const runtimeName = `${fm.package}.${fm.name}`;
 	if (agentNames.has(runtimeName)) fail(`${relative(file)}: duplicate runtime name ${runtimeName}`);
 	agentNames.add(runtimeName);
@@ -103,10 +109,10 @@ for (const file of agentFiles) {
 	if (fm.acceptanceRole === "read-only" && /(?:^|,\s*)(?:edit|write)(?:,|$)/.test(fm.tools ?? "")) {
 		fail(`${relative(file)}: read-only agent exposes edit/write`);
 	}
-	if (runtimeName.startsWith("pi-workbench.") && fm.acceptanceRole === "read-only" && /(?:^|,\s*)bash(?:,|$)/.test(fm.tools ?? "")) {
+	if (runtimeName.startsWith("pi-workbench.") && fm.acceptanceRole === "read-only" && /(?:^|,\s*)bash(?:,|$)/.test(fm.tools ?? "") && !BASH_READ_ONLY_EXCEPTIONS[runtimeName]) {
 		fail(`${relative(file)}: general Workbench read-only roles must not expose unrestricted bash`);
 	}
-	if ((fm.tools ?? "").includes("review_findings") && (Object.hasOwn(fm, "extensions") || Object.hasOwn(fm, "subagentOnlyExtensions"))) {
+	if ((fm.tools ?? "").includes("shipyard_findings") && (Object.hasOwn(fm, "extensions") || Object.hasOwn(fm, "subagentOnlyExtensions"))) {
 		fail(`${relative(file)}: findings roles must use the installed package provider, not relative extension paths`);
 	}
 }
@@ -125,7 +131,7 @@ for (const [runtimeName, { file, fm }] of agentMeta) {
 	}
 }
 for (const runtimeName of Object.keys(ROLE_POLICIES)) {
-	const packaged = ["pi-workbench.", "pi-shipyard.", "pi-agent-teams."].some((prefix) => runtimeName.startsWith(prefix));
+	const packaged = ["pi-workbench.", "pi-shipyard."].some((prefix) => runtimeName.startsWith(prefix));
 	if (packaged && !agentNames.has(runtimeName)) {
 		fail(`role-policy: ${runtimeName} is registered but has no agent file under agents/`);
 	}
@@ -163,6 +169,10 @@ for (const agent of Object.keys(profile?.agentOverrides ?? {})) if (!agentNames.
 
 // The workflow catalog is the single source for Shipyard chain files.
 const catalogFiles = new Set(Object.values(SHIPYARD_WORKFLOWS).map((definition) => definition.file));
+const catalogByFile = new Map(Object.entries(SHIPYARD_WORKFLOWS).map(([name, definition]) => [definition.file, { name, definition }]));
+/** Catalog workflows that must follow the full implementation→review→
+ * falsify→fix→shipwright delivery topology. */
+const DELIVERY_TOPOLOGY_WORKFLOWS = new Set(["deliver", "compact"]);
 for (const [name, definition] of Object.entries(SHIPYARD_WORKFLOWS)) {
 	if (!existsSync(path.join(root, "chains", "shipyard", definition.file))) fail(`workflow catalog: missing chain file ${definition.file} for '${name}'`);
 }
@@ -190,7 +200,7 @@ function inspectTask(chainLabel, stepNumber, task, available, produced, isParall
 		fail(`${prefix}: file-only consumer must explicitly open referenced artifacts`);
 	}
 	if (FIRST_WAVE_OUTPUTS.has(task.as ?? "")
-		&& !task.task.includes("Independent-wave rule: do not call review_findings list")) {
+		&& !task.task.includes("Independent-wave rule: do not call shipyard_findings list")) {
 		fail(`${prefix}: first-wave reviewer must prohibit peer-ledger reads`);
 	}
 	// Findings policy must derive cleanly for every step (stage regex + role table).
@@ -250,10 +260,10 @@ for (const file of chainFiles) {
 		} else inspectTask(label, index + 1, step, available, produced, false);
 		for (const output of produced) available.add(output);
 	}
-	if ((chain.name.startsWith("review-") || ["ship", "deliver", "deliver-compact"].includes(chain.name)) && !JSON.stringify(chain).includes("{{SHIPYARD_STORE}}")) {
-		fail(`${label}: review/delivery workflow must use Shipyard store placeholder`);
+	if ((catalogByFile.get(path.basename(file))?.definition.findings === true) && !JSON.stringify(chain).includes("{{SHIPYARD_STORE}}")) {
+		fail(`${label}: findings-ledger workflow must use the Shipyard store placeholder`);
 	}
-	if (["deliver", "deliver-compact"].includes(chain.name)) validateDeliveryTopology(chain, label);
+	if (DELIVERY_TOPOLOGY_WORKFLOWS.has(catalogByFile.get(path.basename(file))?.name ?? "")) validateDeliveryTopology(chain, label);
 	if (chain.chain.at(-1)?.outputMode !== "inline") warnings.push(`${label}: final step is not inline`);
 }
 

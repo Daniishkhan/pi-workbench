@@ -2,7 +2,7 @@
 name: implementation-worker
 package: pi-shipyard
 description: Sole-writer implementation and review-fix agent that follows approved scope, validates changed behavior, and returns an auditable handoff
-tools: read, grep, find, ls, bash, edit, write, review_findings, shipyard_repo
+tools: read, grep, find, ls, bash, edit, write, shipyard_findings, shipyard_repo
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

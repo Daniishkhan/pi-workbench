@@ -13,10 +13,10 @@ Use a dynamic workflow when the task needs deterministic fanout, multiple phases
 
 ## Required sequence
 
-1. Create a bounded source program with `workflow_create`.
+1. Create a bounded source program with `dynamic_create`.
 2. Inspect the compiler preview and fix validation errors.
-3. Call `workflow_run`; never claim execution before the human approves it.
-4. Use `workflow_control` for monitoring and control; humans enter through `/workbench dynamic <task>`.
+3. Call `dynamic_run`; never claim execution before the human approves it.
+4. Use `dynamic_control` for monitoring and control; humans enter through `/workbench dynamic <task>`.
 5. Save only when the user asks for reuse.
 
 ## Safety defaults

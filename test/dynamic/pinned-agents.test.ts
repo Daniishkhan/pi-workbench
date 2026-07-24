@@ -8,6 +8,7 @@ import {
 	createPinnedReadOnlyAgents,
 	DYNAMIC_READER_ROLES,
 	DYNAMIC_VERIFIER_ROLES,
+	sweepStalePinnedAgents,
 } from "../../extensions/dynamic/pinned-agents.ts";
 
 test("creates random policy-approved read-only agent definitions and removes them", () => {
@@ -36,6 +37,33 @@ test("creates random policy-approved read-only agent definitions and removes the
 		first.dispose();
 		assert(first.files.every((file) => !fs.existsSync(file)));
 		second.dispose();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("janitor sweeps only pinned runtime agents whose owning process is dead", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workbench-dynamic-janitor-test-"));
+	try {
+		const agentsDir = path.join(root, "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		const dead = path.join(agentsDir, "pi-workbench-dynamic-runtime-reader-424242-0123456789abcdef0123456789abcdef.md");
+		const alive = path.join(agentsDir, `pi-workbench-dynamic-runtime-verifier-${process.pid}-fedcba9876543210fedcba9876543210.md`);
+		const unrelated = path.join(agentsDir, "pi-workbench-dynamic-runtime-reader-notapid.md");
+		const userAgent = path.join(agentsDir, "my-agent.md");
+		for (const file of [dead, alive, unrelated, userAgent]) fs.writeFileSync(file, "test\n");
+
+		const swept = sweepStalePinnedAgents(root, (pid) => pid === process.pid);
+		assert.equal(swept, 1);
+		assert.equal(fs.existsSync(dead), false, "dead owner's pinned agent must be swept");
+		assert.equal(fs.existsSync(alive), true, "live owner's pinned agent must be kept");
+		assert.equal(fs.existsSync(unrelated), true, "non-matching names are never touched");
+		assert.equal(fs.existsSync(userAgent), true);
+
+		// Missing agents directory and repeat sweeps are no-ops.
+		assert.equal(sweepStalePinnedAgents(path.join(root, "missing")), 0);
+		assert.equal(sweepStalePinnedAgents(root, () => false), 1, "the live-pid file is swept once its process is gone");
+		assert.equal(fs.existsSync(alive), false);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

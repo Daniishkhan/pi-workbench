@@ -3,14 +3,15 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
+import type { BackgroundWorkProvider } from "pi-subagents/background-work";
 import { Type } from "typebox";
 import { isChildSession } from "../core/env.ts";
 import type { WriterCoordinator } from "../core/writer-coordinator.ts";
 import { compileWorkflowSource } from "./compiler.ts";
-import { loadConfig, resolveWorkflowPolicy } from "./config.ts";
+import { loadDynamicConfig, resolveWorkflowPolicy } from "./config.ts";
 import { DelegationClient } from "./delegation.ts";
 import { WorkflowManager } from "./manager.ts";
-import { createPinnedReadOnlyAgents, type PinnedReadOnlyAgents } from "./pinned-agents.ts";
+import { createPinnedReadOnlyAgents, sweepStalePinnedAgents, type PinnedReadOnlyAgents } from "./pinned-agents.ts";
 import { WorkflowStore } from "./store.ts";
 import type {
 	ResolvedDynamicWorkflowsConfig,
@@ -20,7 +21,9 @@ import type {
 } from "./types.ts";
 
 const WIDGET_KEY = "dynamic-workflows";
-const MESSAGE_TYPE = "dynamic-workflow-complete";
+const MESSAGE_TYPE = "pi-workbench:dynamic:complete";
+const RUN_ENTRY_TYPE = "pi-workbench:dynamic:run";
+const BACKGROUND_WORK_PROVIDER_NAME = "pi-workbench:dynamic-workflows";
 const SOURCE_MAX_CHARS = 64 * 1024;
 const INPUT_MAX_BYTES = 4 * 1024;
 
@@ -112,16 +115,26 @@ function formatWorkflow(source: WorkflowSource): string {
 
 export interface RegisterDynamicWorkflowsOptions {
 	writerCoordinator?: WriterCoordinator;
+	/** Raw `dynamic` section of the unified Pi Workbench config. */
+	dynamicConfig?: Record<string, unknown>;
+	/** Composition-root hook registering a pi-subagents background-work provider
+	 * so headless auto-drain and subagent_wait can see active workflow runs. */
+	registerBackgroundWork?: (provider: BackgroundWorkProvider) => () => void;
 }
 
 export default function registerDynamicWorkflows(pi: ExtensionAPI, options: RegisterDynamicWorkflowsOptions = {}): void {
 	if (isChildSession()) return;
 
 	let runtime: RuntimeState | undefined;
+	let initError: string | undefined;
 	const sessionApprovals = new Set<string>();
 
 	function requireRuntime(ctx?: ExtensionContext): RuntimeState {
-		if (!runtime) throw new Error("Dynamic-workflows runtime is not initialized. Run /reload and try again.");
+		if (!runtime) {
+			throw new Error(initError
+				? `Dynamic-workflows runtime failed to initialize: ${initError}`
+				: "Dynamic-workflows runtime is not initialized. Run /reload and try again.");
+		}
 		if (ctx && runtime.ctx.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) {
 			throw new Error("Dynamic-workflows runtime belongs to a different Pi session.");
 		}
@@ -166,7 +179,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		} catch {
-			// The durable run result remains on disk and workflow_control can inspect it.
+			// The durable run result remains on disk and dynamic_control can inspect it.
 		}
 	}
 
@@ -177,7 +190,13 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 			await prior.manager.shutdown();
 			prior.pinnedAgents.dispose();
 		}
-		const config = loadConfig(getAgentDir());
+		const { config, warnings } = loadDynamicConfig(getAgentDir(), options.dynamicConfig);
+		for (const warning of warnings) {
+			console.error(warning);
+			try { ctx.ui.notify(warning, "warning"); } catch { /* UI may be unavailable. */ }
+		}
+		const swept = sweepStalePinnedAgents(getAgentDir());
+		if (swept > 0) console.error(`Removed ${swept} stale dynamic-workflow runtime agent definition(s).`);
 		const store = new WorkflowStore({
 			agentDir: getAgentDir(),
 			cwd: ctx.cwd,
@@ -301,7 +320,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 			options.writerCoordinator?.attachRun(writerLease.token, started.id);
 			void started.done.finally(() => options.writerCoordinator?.release(writerLease.token));
 		}
-		pi.appendEntry("pi-dynamic-workflows:run", {
+		pi.appendEntry(RUN_ENTRY_TYPE, {
 			runId: started.id,
 			name: source.name,
 			sourceHash: source.hash,
@@ -318,13 +337,23 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		return new Text(theme.fg(color, content), 0, 0);
 	});
 
+	// Headless auto-drain and subagent_wait visibility: active workflow runs are
+	// published as pi-subagents background work for their owning Pi session.
+	options.registerBackgroundWork?.({
+		name: BACKGROUND_WORK_PROVIDER_NAME,
+		listActiveWork: () => (runtime?.manager.listActive() ?? []).map((snapshot) => ({
+			id: snapshot.id,
+			sessionId: snapshot.sessionId,
+		})),
+	});
+
 	pi.registerTool({
-		name: "workflow_create",
+		name: "dynamic_create",
 		label: "Workflow Create",
 		description: "Compile and stage a restricted JavaScript dynamic workflow. This validates only; it never executes or approves the workflow. Source must be one workflow({...}) builder expression with bounded phase/run/parallel/forEach/when/repeat/set operations.",
 		promptSnippet: "Compile and stage a bounded JavaScript orchestration workflow",
 		promptGuidelines: [
-			"Use workflow_create before workflow_run when a task needs deterministic multi-phase fanout, bounded loops/branches, or per-item verification.",
+			"Use dynamic_create before dynamic_run when a task needs deterministic multi-phase fanout, bounded loops/branches, or per-item verification.",
 			"Dynamic workflow source is a restricted builder DSL, not arbitrary JavaScript: do not use imports, variables, callbacks, native loops, eval, filesystem, network, or process APIs.",
 			"Default dynamic workflows to size small and permissions ['read']; request 'write' only for one explicit single-writer implementation node. Parallel writers are disabled.",
 		],
@@ -347,14 +376,14 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 						`Static nodes: ${compiled.staticNodeCount} · agent cap: ${policy.maxAgents} · concurrency: ${policy.maxConcurrency}`,
 						`SHA-256: ${source.hash}`,
 						`Draft: ${source.path}`,
-						"Next: call workflow_run. Pi will show the exact source and run manifest for human approval.",
+						"Next: call dynamic_run. Pi will show the exact source and run manifest for human approval.",
 					].join("\n"),
 				}],
 				details: { source, compiled },
 			};
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("workflow create "))}${theme.fg("accent", args.name)}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("dynamic create "))}${theme.fg("accent", args.name)}`, 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			const text = result.content.find((part) => part.type === "text");
@@ -363,13 +392,13 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 	});
 
 	pi.registerTool({
-		name: "workflow_run",
+		name: "dynamic_run",
 		label: "Workflow Run",
 		description: "Review, approve, and run a staged or saved dynamic workflow. Untrusted source is shown verbatim in an editor, then Pi confirms exact hash, input, permissions, phases, cwd, agent cap, concurrency, and timeout. Intermediate agent results stay in workflow variables/artifacts; only the selected final result is returned.",
 		promptSnippet: "Run a staged or saved workflow after human approval",
 		promptGuidelines: [
-			"Never claim a workflow ran until workflow_run returns a run id and terminal result (or a background start).",
-			"Use background=false when the current request must return the workflow result in this turn; use background=true only when the user wants asynchronous monitoring through workflow_control.",
+			"Never claim a workflow ran until dynamic_run returns a run id and terminal result (or a background start).",
+			"Use background=false when the current request must return the workflow result in this turn; use background=true only when the user wants asynchronous monitoring through dynamic_control.",
 		],
 		executionMode: "sequential",
 		parameters: RunParams,
@@ -404,7 +433,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 		},
 		renderCall(args, theme) {
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("workflow run "))}${theme.fg("accent", args.name)}${args.background ? theme.fg("warning", " [background]") : ""}`,
+				`${theme.fg("toolTitle", theme.bold("dynamic run "))}${theme.fg("accent", args.name)}${args.background ? theme.fg("warning", " [background]") : ""}`,
 				0,
 				0,
 			);
@@ -418,7 +447,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 	});
 
 	pi.registerTool({
-		name: "workflow_control",
+		name: "dynamic_control",
 		label: "Workflow Control",
 		description: "List, inspect, cooperatively pause/resume, stop, save, or delete dynamic workflows. Pause stops scheduling new nodes and lets active agents drain. Save/delete require human confirmation; project workflows require a trusted project.",
 		promptSnippet: "Inspect or control dynamic workflow runs and saved definitions",
@@ -459,7 +488,7 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 					return { content: [{ type: "text", text: `Stop requested. Side effects are not rolled back.\n${formatSnapshot(run)}` }], details: { run } };
 				}
 				case "save": {
-					if (!params.name) throw new Error("workflow_control save requires name.");
+					if (!params.name) throw new Error("dynamic_control save requires name.");
 					const scope = params.scope ?? "user";
 					if (scope === "project" && !ctx.isProjectTrusted()) throw new Error("Cannot save a project workflow in an untrusted project.");
 					if (!ctx.hasUI) throw new Error("Saving a workflow requires interactive confirmation.");
@@ -478,10 +507,10 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 					if (!confirmed) throw new Error("Workflow save cancelled.");
 					const saved = current.store.saveDraft(params.name, scope, params.overwrite ?? false);
 					current.store.trust(saved);
-					return { content: [{ type: "text", text: `Saved and trusted ${scope} workflow '${saved.name}'. Run it through /workbench dynamic or workflow_run.\n${saved.path}` }], details: { source: saved } };
+					return { content: [{ type: "text", text: `Saved and trusted ${scope} workflow '${saved.name}'. Run it through /workbench dynamic or dynamic_run.\n${saved.path}` }], details: { source: saved } };
 				}
 				case "delete": {
-					if (!params.name || !params.scope) throw new Error("workflow_control delete requires name and scope.");
+					if (!params.name || !params.scope) throw new Error("dynamic_control delete requires name and scope.");
 					if (params.scope === "project" && !ctx.isProjectTrusted()) throw new Error("Cannot delete a project workflow in an untrusted project.");
 					if (!ctx.hasUI) throw new Error("Deleting a workflow requires interactive confirmation.");
 					const confirmed = await ctx.ui.confirm(`Delete ${params.scope} workflow '${params.name}'?`, "This removes the saved definition, not prior run artifacts.");
@@ -492,12 +521,24 @@ export default function registerDynamicWorkflows(pi: ExtensionAPI, options: Regi
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("workflow "))}${theme.fg("accent", args.action)}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("dynamic "))}${theme.fg("accent", args.action)}`, 0, 0);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		await initialize(ctx);
+		try {
+			await initialize(ctx);
+			initError = undefined;
+		} catch (error) {
+			initError = error instanceof Error ? error.message : String(error);
+			console.error("Dynamic Workflows failed to initialize:", error);
+			try {
+				ctx.ui.notify(`Dynamic Workflows failed to initialize: ${initError}`, "error");
+			} catch {
+				// UI may be unavailable in non-interactive modes; tool calls still
+				// surface the recorded initialization error.
+			}
+		}
 	});
 
 	pi.on("session_shutdown", async () => {

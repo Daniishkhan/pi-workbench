@@ -1,6 +1,6 @@
 ---
-name: scout
-package: pi-agent-teams
+name: teams-scout
+package: pi-workbench
 description: Read-only Agent Teams teammate for research, recon, and review slices. Coordinates through team tools like a regular teammate (mailbox, shared tasks, notes) but cannot edit or write project files.
 tools: read, grep, find, ls, bash, team_send, team_inbox, team_tasks, team_status, team_peers, team_notes
 defaultContext: fresh

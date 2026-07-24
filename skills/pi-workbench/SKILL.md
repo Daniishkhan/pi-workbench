@@ -11,7 +11,7 @@ Pi Workbench has one policy layer and four alternative execution modes. Never ne
 
 - **Quick one-off**: `workbench_route` mode `quick` for bounded repository reconnaissance.
 - **Deep one-off**: mode `deep` for comprehensive implementation context.
-- **Plan / implement / review-oneoff**: dedicated general roles for one bounded result.
+- **Plan / implement / review-oneoff**: dedicated general roles for one bounded result. Prefix a plan task with `grill:` (or explicitly ask to interview/harden it) when the planner should pressure-test it one question at a time before returning the final plan.
 - **Shipyard**: fixed software lifecycle modes (`explore`, `debug`, `fast`, `review`, `security`, `ui`, `compact`, `deliver`, `ship`).
 - **Agent Teams**: only when 2-5 peers genuinely need shared tasks or direct messages. Prefer read-only scouts and only one writer per cwd.
 - **Dynamic Workflows**: bounded data-dependent fanout, branches, or loops; experimental, disabled by default, and always human-approved.

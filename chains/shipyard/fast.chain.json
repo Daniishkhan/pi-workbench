@@ -1,5 +1,5 @@
 {
-  "name": "review-fast",
+  "name": "fast",
   "package": "pi-shipyard",
   "description": "Focused low-cost review with two independent bug-finding angles and compact adjudication.",
   "chain": [
@@ -10,7 +10,7 @@
           "agent": "pi-shipyard.contract-reviewer",
           "label": "Contract check",
           "as": "contracts",
-          "task": "Run a focused contract/correctness review of: {task}\n\nInspect repository instructions, current diff, relevant source/callers/tests, and record concrete findings in {{SHIPYARD_STORE}} using review_findings. Do not edit project/source files.\n\nUse stage `wave-1-contracts` and sourceRole `pi-shipyard.contract-reviewer` for new findings.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.",
+          "task": "Run a focused contract/correctness review of: {task}\n\nInspect repository instructions, current diff, relevant source/callers/tests, and record concrete findings in {{SHIPYARD_STORE}} using shipyard_findings. Do not edit project/source files.\n\nUse stage `wave-1-contracts` and sourceRole `pi-shipyard.contract-reviewer` for new findings.\n\nIndependent-wave rule: do not call shipyard_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.",
           "output": "review/fast-contracts.md",
           "outputMode": "file-only",
           "progress": false,
@@ -28,7 +28,7 @@
           "agent": "pi-shipyard.adversarial-tester",
           "label": "Counterexample check",
           "as": "adversarial",
-          "task": "Run a focused adversarial test review of: {task}\n\nInspect repository instructions, current diff, relevant source/tests, construct the highest-value counterexamples, and record concrete findings in {{SHIPYARD_STORE}} using review_findings. Do not edit project/source files.\n\nUse stage `wave-1-adversarial` and sourceRole `pi-shipyard.adversarial-tester` for new findings.\n\nIndependent-wave rule: do not call review_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.",
+          "task": "Run a focused adversarial test review of: {task}\n\nInspect repository instructions, current diff, relevant source/tests, construct the highest-value counterexamples, and record concrete findings in {{SHIPYARD_STORE}} using shipyard_findings. Do not edit project/source files.\n\nUse stage `wave-1-adversarial` and sourceRole `pi-shipyard.adversarial-tester` for new findings.\n\nIndependent-wave rule: do not call shipyard_findings list, get, stats, snapshot, or update; add proposals directly and let later stages deduplicate.",
           "output": "review/fast-adversarial.md",
           "outputMode": "file-only",
           "progress": false,
@@ -51,7 +51,7 @@
       "phase": "Synthesis",
       "label": "Verify and summarize",
       "as": "final",
-      "task": "Adjudicate this focused review.\n\nTarget: {task}\nContract receipt: {outputs.contracts}\nAdversarial receipt: {outputs.adversarial}\nShared findings store: {{SHIPYARD_STORE}}\n\nSnapshot the store with review_findings using stage label wave-1-fast. Read both artifacts and every proposed finding. Directly verify important claims, updating statuses with expected revisions. Export the ledger to {{SHIPYARD_RUN_DIR}}/findings.md and return a compact final verdict with verified fixes, unresolved risks, rejected claims, coverage, and required validation. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
+      "task": "Adjudicate this focused review.\n\nTarget: {task}\nContract receipt: {outputs.contracts}\nAdversarial receipt: {outputs.adversarial}\nShared findings store: {{SHIPYARD_STORE}}\n\nSnapshot the store with shipyard_findings using stage label wave-1-fast. Read both artifacts and every proposed finding. Directly verify important claims, updating statuses with expected revisions. Export the ledger to {{SHIPYARD_RUN_DIR}}/findings.md and return a compact final verdict with verified fixes, unresolved risks, rejected claims, coverage, and required validation. Do not edit project/source files.\n\nOpen and read every referenced output artifact before reasoning; file-only references contain paths, not artifact contents.",
       "output": "review/final.md",
       "outputMode": "inline",
       "progress": false,

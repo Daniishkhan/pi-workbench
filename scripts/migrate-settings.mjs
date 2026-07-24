@@ -15,6 +15,20 @@ const OLD_SOURCES = new Set([
 const WORKBENCH_SOURCE = "./packages/pi-workbench";
 const LEGACY_RUNTIME = "npm:pi-subagents@0.35.1";
 const EMBEDDED_RUNTIME_COMMIT = "105c1399d36517292cc7dbe1f56f4724de39bd10";
+/** Legacy agent runtime names rewritten to their unified Workbench namespace
+ * when they appear in settings.subagents.agentOverrides. */
+const LEGACY_AGENT_OVERRIDES = {
+	"pi-agent-teams.scout": "pi-workbench.teams-scout",
+	"pi-agent-teams.teammate": "pi-workbench.teams-teammate",
+};
+
+function rewriteAgentOverrideKeys(overrides) {
+	const rewritten = {};
+	for (const [key, value] of Object.entries(overrides)) {
+		rewritten[LEGACY_AGENT_OVERRIDES[key] ?? key] = value;
+	}
+	return rewritten;
+}
 
 export function sha256(value) {
 	return createHash("sha256").update(value).digest("hex");
@@ -94,7 +108,7 @@ export function buildMigratedSettings(settings, profileOverrides = loadProfile()
 			...existingSubagents,
 			agentOverrides: {
 				...profileOverrides,
-				...existingOverrides,
+				...rewriteAgentOverrideKeys(existingOverrides),
 			},
 		},
 	};

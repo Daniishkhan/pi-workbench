@@ -2,7 +2,7 @@
 name: falsifier
 package: pi-shipyard
 description: Independently verifies, rejects, or narrows proposed review findings before fixes are authorized
-tools: read, grep, find, ls, review_findings, shipyard_repo
+tools: read, grep, find, ls, shipyard_findings, shipyard_repo
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

@@ -1,21 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
-	getAgentDir,
 	truncateHead,
 	withFileMutationQueue,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { legacyShipyardContextRoot, shipyardContextRoot } from "../core/paths.ts";
 import { textResult } from "../core/result.ts";
 import { isRepositoryContextFresh, repositoryContextPath } from "./repo-context-key.ts";
 import { inspectRepositoryState } from "./repo-context-state.ts";
 
-const CONTEXT_ROOT = path.join(getAgentDir(), "shipyard-context");
 const CONTEXT_SCHEMA_VERSION = 1;
 const MAX_CONTEXT_CHARS = 50_000;
 
@@ -61,12 +59,15 @@ export default function registerRepoContext(pi: ExtensionAPI) {
 		name: "shipyard_context",
 		label: "Shipyard Context",
 		description: `Read the local reusable repository map for the current checkout. The result states whether it matches HEAD. Treat stale maps as orientation only and verify claims in source. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+		promptSnippet: "Read the cached Shipyard repository map for this checkout",
 		parameters: Type.Object({}, { additionalProperties: false }),
 		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("shipyard_context cancelled");
 			const state = await currentRepositoryState(pi, ctx.cwd, signal);
-			const file = repositoryContextPath(CONTEXT_ROOT, state.root);
-			const cached = await readContext(file);
+			const contextRoot = shipyardContextRoot();
+			const file = repositoryContextPath(contextRoot, state.root);
+			const cached = await readContext(file)
+				?? await readContext(repositoryContextPath(legacyShipyardContextRoot(), state.root));
 			if (!cached) {
 				return textResult(`No reusable Shipyard context is cached for ${state.root}.\nCurrent revision: ${state.head ?? "unversioned"}.`, {
 					repositoryRoot: state.root,
@@ -102,13 +103,15 @@ export default function registerRepoContext(pi: ExtensionAPI) {
 		name: "shipyard_context_update",
 		label: "Update Shipyard Context",
 		description: "Persist a concise reusable repository map outside the worktree, bound to the current repository root and HEAD. Use only after verifying the map against source.",
+		promptSnippet: "Persist a verified reusable repository map",
 		parameters: ContextUpdateParams,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("shipyard_context_update cancelled");
 			const content = params.content.trim();
 			if (!content) throw new Error("Repository context content cannot be empty.");
 			const state = await currentRepositoryState(pi, ctx.cwd, signal);
-			const file = repositoryContextPath(CONTEXT_ROOT, state.root);
+			const contextRoot = shipyardContextRoot();
+			const file = repositoryContextPath(contextRoot, state.root);
 			const record: CachedRepositoryContext = {
 				schemaVersion: CONTEXT_SCHEMA_VERSION,
 				repositoryRoot: state.root,
@@ -116,7 +119,7 @@ export default function registerRepoContext(pi: ExtensionAPI) {
 				updatedAt: new Date().toISOString(),
 				content,
 			};
-			await mkdir(CONTEXT_ROOT, { recursive: true, mode: 0o700 });
+			await mkdir(contextRoot, { recursive: true, mode: 0o700 });
 			await withFileMutationQueue(file, async () => {
 				const temporary = `${file}.${randomUUID()}.tmp`;
 				await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });

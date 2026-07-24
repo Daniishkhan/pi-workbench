@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isChildSession } from "../core/env.ts";
 import { beginGuardedSpawn, type GuardedSpawnResult } from "../core/guarded-spawn.ts";
+import { shipyardRunsRoot } from "../core/paths.ts";
 import type { ShipyardWorkflowName as WorkflowName } from "../core/routing.ts";
 import { safePathSegment } from "../core/sanitize.ts";
 import type { SubagentRpcClient, SubagentRpcReply } from "../core/subagent-rpc.ts";
@@ -16,7 +17,6 @@ import { SHIPYARD_WORKFLOWS, resolveWorkflowTask } from "./workflow-catalog.ts";
 import { bindWorkflowAgents, materializeWorkflowOutputs } from "./workflow-policy.ts";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const SHIPYARD_RUNS_ROOT = path.join(getAgentDir(), "shipyard-runs");
 
 export interface RegisterWorkflowsOptions {
 	agentBindings?: Record<string, string>;
@@ -91,7 +91,7 @@ export default function registerWorkflows(pi: ExtensionAPI, options: RegisterWor
 		const sessionId = ctx.sessionManager.getSessionId() ?? `ephemeral-${randomUUID().slice(0, 8)}`;
 		const sessionDir = `S-${safePathSegment(sessionId)}`;
 		const runId = `R-${safePathSegment(`${Date.now().toString(36)}-${randomUUID().slice(0, 12)}`)}`;
-		const runDir = path.join(SHIPYARD_RUNS_ROOT, sessionDir, runId);
+		const runDir = path.join(shipyardRunsRoot(), sessionDir, runId);
 		const storePath = path.join(runDir, "findings");
 		const artifactsDir = path.join(runDir, "artifacts");
 		await mkdir(runDir, { recursive: true, mode: 0o700 });
@@ -109,7 +109,7 @@ export default function registerWorkflows(pi: ExtensionAPI, options: RegisterWor
 		for (let index = 0; index < capabilityTasks.length; index += 1) {
 			const task = capabilityTasks[index].task;
 			const token = grants[index].token;
-			const instruction = `Findings capability: ${token}. Pass it exactly as the capability parameter on every review_findings call. Never copy it into an artifact or finding.`;
+			const instruction = `Findings capability: ${token}. Pass it exactly as the capability parameter on every shipyard_findings call. Never copy it into an artifact or finding.`;
 			task.task = `${String(task.task ?? "").trimEnd()}\n\n${instruction}`;
 		}
 		const chain = bindWorkflowAgents(canonicalChain, options.agentBindings ?? {}) as Array<Record<string, unknown>>;

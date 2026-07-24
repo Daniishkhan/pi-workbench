@@ -161,14 +161,14 @@ test("executes the exact edited draft and acquires its compiled write manifest",
 	registerDynamicWorkflows(harness.pi as unknown as ExtensionAPI, { writerCoordinator: coordinator as unknown as WriterCoordinator });
 	await harness.pi.emitLifecycle("session_start", harness.ctx);
 
-	await harness.pi.tools.get("workflow_create")!.execute(
+	await harness.pi.tools.get("dynamic_create")!.execute(
 		"create",
 		{ name: "edited-flow", source: workflowSource("edited-flow", "ORIGINAL READ") },
 		undefined,
 		undefined,
 		harness.ctx,
 	);
-	const run = await harness.pi.tools.get("workflow_run")!.execute(
+	const run = await harness.pi.tools.get("dynamic_run")!.execute(
 		"run",
 		{ name: "edited-flow", input: {}, background: false },
 		undefined,
@@ -187,9 +187,9 @@ test("executes the exact edited draft and acquires its compiled write manifest",
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.deepEqual(coordinator.released, [coordinator.acquired[0]?.token]);
 	assert.match(harness.confirmations.at(-1)?.body ?? "", /Permissions: read, write/);
-	const staged = path.join(harness.root, "agent", "workflow-drafts", "index-session", "edited-flow.workflow.js");
+	const staged = path.join(harness.root, "agent", "workbench", "dynamic", "drafts", "index-session", "edited-flow.workflow.js");
 	assert.equal(fs.readFileSync(staged, "utf8"), `${edited}\n`);
-	assert.equal(harness.pi.entries.at(-1)?.type, "pi-dynamic-workflows:run");
+	assert.equal(harness.pi.entries.at(-1)?.type, "pi-workbench:dynamic:run");
 	await harness.pi.emitLifecycle("session_shutdown", harness.ctx);
 });
 
@@ -203,9 +203,9 @@ test("keeps the writer lease until delegated cancellation is terminally acknowle
 	harness.pi.events.on(CANCEL, (payload) => { cancellation = payload as Record<string, unknown>; });
 	registerDynamicWorkflows(harness.pi as unknown as ExtensionAPI, { writerCoordinator: coordinator as unknown as WriterCoordinator });
 	await harness.pi.emitLifecycle("session_start", harness.ctx);
-	await harness.pi.tools.get("workflow_create")!.execute("create", { name: "cancel-flow", source }, undefined, undefined, harness.ctx);
+	await harness.pi.tools.get("dynamic_create")!.execute("create", { name: "cancel-flow", source }, undefined, undefined, harness.ctx);
 	const controller = new AbortController();
-	const running = harness.pi.tools.get("workflow_run")!.execute("run", { name: "cancel-flow", input: {}, background: false }, controller.signal, undefined, harness.ctx);
+	const running = harness.pi.tools.get("dynamic_run")!.execute("run", { name: "cancel-flow", input: {}, background: false }, controller.signal, undefined, harness.ctx);
 	for (let index = 0; index < 20 && !request; index++) await new Promise((resolve) => setImmediate(resolve));
 	assert.ok(request);
 	controller.abort();
@@ -234,13 +234,13 @@ test("recompiles trusted saved bytes before writer leasing instead of trusting s
 	autoComplete(harness.pi, requests);
 	registerDynamicWorkflows(harness.pi as unknown as ExtensionAPI, { writerCoordinator: coordinator as unknown as WriterCoordinator });
 	await harness.pi.emitLifecycle("session_start", harness.ctx);
-	await harness.pi.tools.get("workflow_create")!.execute("create", { name: "metadata-flow", source }, undefined, undefined, harness.ctx);
-	await harness.pi.tools.get("workflow_control")!.execute("save", { action: "save", name: "metadata-flow", scope: "user" }, undefined, undefined, harness.ctx);
-	const metadataPath = path.join(harness.root, "agent", "workflows", "metadata-flow.workflow.json");
+	await harness.pi.tools.get("dynamic_create")!.execute("create", { name: "metadata-flow", source }, undefined, undefined, harness.ctx);
+	await harness.pi.tools.get("dynamic_control")!.execute("save", { action: "save", name: "metadata-flow", scope: "user" }, undefined, undefined, harness.ctx);
+	const metadataPath = path.join(harness.root, "agent", "workbench", "dynamic", "saved", "metadata-flow.workflow.json");
 	const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as { manifest: { permissions: string[] } };
 	metadata.manifest.permissions = ["read"];
 	fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
-	await harness.pi.tools.get("workflow_run")!.execute("run", { name: "metadata-flow", input: {}, background: false }, undefined, undefined, harness.ctx);
+	await harness.pi.tools.get("dynamic_run")!.execute("run", { name: "metadata-flow", input: {}, background: false }, undefined, undefined, harness.ctx);
 	for (let index = 0; index < 20 && requests.length === 0; index++) await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(requests[0]?.agent, "pi-workbench.worker");
 	assert.equal(coordinator.acquired.length, 1, "compiled source permissions—not mutable metadata—must control writer ownership");
@@ -258,15 +258,77 @@ test("an exact reviewed save remains reusable without registering a slash comman
 	registerDynamicWorkflows(harness.pi as unknown as ExtensionAPI);
 	await harness.pi.emitLifecycle("session_start", harness.ctx);
 
-	await harness.pi.tools.get("workflow_create")!.execute("create", { name: "saved-flow", source: original }, undefined, undefined, harness.ctx);
-	await harness.pi.tools.get("workflow_control")!.execute("save", { action: "save", name: "saved-flow", scope: "user" }, undefined, undefined, harness.ctx);
+	await harness.pi.tools.get("dynamic_create")!.execute("create", { name: "saved-flow", source: original }, undefined, undefined, harness.ctx);
+	await harness.pi.tools.get("dynamic_control")!.execute("save", { action: "save", name: "saved-flow", scope: "user" }, undefined, undefined, harness.ctx);
 	assert.equal(harness.pi.commands.size, 0, "Dynamic Workflows must not create standalone slash commands");
-	await harness.pi.tools.get("workflow_run")!.execute("run", { name: "saved-flow", input: {}, background: false }, undefined, undefined, harness.ctx);
+	await harness.pi.tools.get("dynamic_run")!.execute("run", { name: "saved-flow", input: {}, background: false }, undefined, undefined, harness.ctx);
 	for (let index = 0; index < 20 && requests.length === 0; index++) await new Promise((resolve) => setImmediate(resolve));
 
 	assert.equal(requests.length, 1);
 	assert.match(String(requests[0]?.task), /SAVED SOURCE$/);
 	assert.doesNotMatch(String(requests[0]?.task), /UNREVIEWED ORIGINAL/);
 	assert.equal(harness.notifications.some((entry) => entry.level === "error"), false);
+	await harness.pi.emitLifecycle("session_shutdown", harness.ctx);
+});
+
+test("publishes active runs to the pi-subagents background-work provider", async () => {
+	const source = workflowSource("provider-flow", "WAIT FOR ME");
+	const harness = makeHarness(async () => source);
+	interface Provider {
+		name: string;
+		listActiveWork(): Array<{ id: string; sessionId: string }>;
+	}
+	let provider: Provider | undefined;
+	registerDynamicWorkflows(harness.pi as unknown as ExtensionAPI, {
+		registerBackgroundWork: (candidate) => {
+			provider = candidate as unknown as Provider;
+			return () => { provider = undefined; };
+		},
+	});
+	await harness.pi.emitLifecycle("session_start", harness.ctx);
+	assert.equal(provider?.name, "pi-workbench:dynamic-workflows");
+	assert.deepEqual(provider?.listActiveWork(), []);
+
+	let request: Record<string, unknown> | undefined;
+	harness.pi.events.on(REQUEST, (payload) => { request = payload as Record<string, unknown>; });
+	await harness.pi.tools.get("dynamic_create")!.execute("create", { name: "provider-flow", source }, undefined, undefined, harness.ctx);
+	const started = await harness.pi.tools.get("dynamic_run")!.execute(
+		"run",
+		{ name: "provider-flow", input: {}, background: true },
+		undefined,
+		undefined,
+		harness.ctx,
+	) as { details: { run: { id: string; state: string } } };
+	for (let index = 0; index < 20 && !request; index++) await new Promise((resolve) => setImmediate(resolve));
+	assert.ok(request);
+	assert.deepEqual(provider?.listActiveWork(), [{ id: started.details.run.id, sessionId: "index-session" }]);
+
+	harness.pi.events.emit(RESPONSE, {
+		version: 1,
+		requestId: request.requestId,
+		status: "completed",
+		agent: request.agent,
+		output: "done",
+	});
+	for (let index = 0; index < 40 && provider?.listActiveWork().length !== 0; index++) await new Promise((resolve) => setImmediate(resolve));
+	assert.deepEqual(provider?.listActiveWork(), [], "terminal runs must leave the background-work snapshot");
+	await harness.pi.emitLifecycle("session_shutdown", harness.ctx);
+});
+
+test("an initialization failure surfaces at session start and in later tool calls", async () => {
+	const harness = makeHarness(async () => "unreachable");
+	// Force initialize() to fail: the pinned-agent directory collides with a file.
+	const agentsPath = path.join(harness.root, "agent", "agents");
+	fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
+	fs.writeFileSync(agentsPath, "not a directory\n");
+	registerDynamicWorkflows(harness.pi as unknown as ExtensionAPI);
+	await harness.pi.emitLifecycle("session_start", harness.ctx);
+	const failure = harness.notifications.find((entry) => entry.level === "error");
+	assert.ok(failure, "session_start must surface the initialization failure");
+	assert.match(failure!.text, /Dynamic Workflows failed to initialize/);
+	await assert.rejects(
+		() => harness.pi.tools.get("dynamic_create")!.execute("create", { name: "x", source: "workflow({})" }, undefined, undefined, harness.ctx),
+		/failed to initialize/,
+	);
 	await harness.pi.emitLifecycle("session_shutdown", harness.ctx);
 });

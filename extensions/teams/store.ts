@@ -1,14 +1,18 @@
 /**
- * Team storage layer for pi-agent-teams.
+ * Team storage layer for Agent Teams.
  *
  * Layout on disk (mirrors the Claude Code agent-teams model):
  *
- *   ~/.pi/agent/teams/<team>/
+ *   ~/.pi/agent/workbench/teams/<team>/
  *     config.json            team metadata + member roster
  *     tasks.json             shared task list
  *     inboxes/<member>.json  mailbox per member ("lead" is the lead's mailbox)
  *     inboxes/<member>.cursor  read cursor (timestamp watermark) per member
  *     notes/<member>.md      continuity notes per member
+ *
+ * The root honors PI_WORKBENCH_TEAMS_ROOT (legacy PI_AGENT_TEAMS_ROOT as
+ * fallback) and otherwise lives under pi's agent directory. Pre-unification
+ * teams under ~/.pi/agent/teams remain readable as a fallback.
  *
  * All mutations go through a mkdir-based lock so multiple Pi processes
  * (lead + teammates) can share state safely. Writes are atomic
@@ -17,9 +21,9 @@
 
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { readJson, writeJsonAtomic } from "../core/json.ts";
+import { LEGACY_TEAMS_ROOT_ENV, legacyTeamsStateRoot, TEAMS_ROOT_ENV, teamsStateRoot } from "../core/paths.ts";
 
 export type MemberStatus = "running" | "stopping" | "idle" | "failed" | "stopped";
 export type TaskStatus = "pending" | "in_progress" | "completed";
@@ -74,9 +78,20 @@ export interface TeamMessage {
 export const LEAD = "lead";
 
 export function teamsRoot(): string {
-	const override = process.env.PI_AGENT_TEAMS_ROOT?.trim();
-	if (override) return path.resolve(override);
-	return path.join(os.homedir(), ".pi", "agent", "teams");
+	return teamsStateRoot();
+}
+
+/** True when an explicit teams-root environment override is in effect; the
+ * legacy pre-unification root is only consulted when no override is set. */
+function teamsRootOverridden(): boolean {
+	return Boolean(process.env[TEAMS_ROOT_ENV]?.trim() || process.env[LEGACY_TEAMS_ROOT_ENV]?.trim());
+}
+
+/** Legacy pre-unification roots to read as a fallback, when enabled. */
+function fallbackTeamsRoots(): string[] {
+	if (teamsRootOverridden()) return [];
+	const legacy = legacyTeamsStateRoot();
+	return path.resolve(legacy) === path.resolve(teamsRoot()) ? [] : [legacy];
 }
 
 export function sanitizeName(raw: string): string {
@@ -102,11 +117,16 @@ export function sanitizeMemberName(raw: string): string {
 export function teamDir(name: string): string {
 	const canonical = sanitizeName(name);
 	if (canonical !== name) throw new Error(`Team name '${name}' is not canonical; expected '${canonical}'.`);
-	return path.join(teamsRoot(), canonical);
+	const primary = path.join(teamsRoot(), canonical);
+	if (fs.existsSync(path.join(primary, "config.json"))) return primary;
+	for (const legacy of fallbackTeamsRoots()) {
+		const candidate = path.join(legacy, canonical);
+		if (fs.existsSync(path.join(candidate, "config.json"))) return candidate;
+	}
+	return primary;
 }
 
-export function listTeamNames(): string[] {
-	const root = teamsRoot();
+function listTeamNamesIn(root: string): string[] {
 	let entries: fs.Dirent[];
 	try {
 		entries = fs.readdirSync(root, { withFileTypes: true });
@@ -114,6 +134,14 @@ export function listTeamNames(): string[] {
 		return [];
 	}
 	return entries.filter((e) => e.isDirectory() && fs.existsSync(path.join(root, e.name, "config.json"))).map((e) => e.name);
+}
+
+export function listTeamNames(): string[] {
+	const names = new Set(listTeamNamesIn(teamsRoot()));
+	for (const legacy of fallbackTeamsRoots()) {
+		for (const name of listTeamNamesIn(legacy)) names.add(name);
+	}
+	return [...names].sort();
 }
 
 // ---------------------------------------------------------------------------

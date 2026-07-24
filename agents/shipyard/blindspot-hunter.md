@@ -2,7 +2,7 @@
 name: blindspot-hunter
 package: pi-shipyard
 description: Reviews what the first wave did not cover and searches for sibling instances of discovered bug classes
-tools: read, grep, find, ls, review_findings, shipyard_repo
+tools: read, grep, find, ls, shipyard_findings, shipyard_repo
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

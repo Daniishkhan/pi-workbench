@@ -2,7 +2,7 @@
 name: runtime-reviewer
 package: pi-shipyard
 description: Traces runtime data flow, state transitions, errors, retries, cancellation, cleanup, and concurrency to find behavioral failures
-tools: read, grep, find, ls, review_findings, shipyard_repo
+tools: read, grep, find, ls, shipyard_findings, shipyard_repo
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
@@ -21,6 +21,6 @@ Trace changed execution paths end to end: input boundary, normalization, branchi
 
 Do not stop at the changed function. Follow relevant callers and callees until the behavior and ownership boundaries are clear. Construct realistic failure scenarios and run focused probes when safe.
 
-Use `review_findings` for concrete defects only. During an independent/first-wave task, do not list or read peer findings before completing your own discovery; add directly. After that barrier, search first and do not paraphrase another finding. When an existing finding identifies a reusable failure class, search sibling paths and add separately only for a materially distinct trigger or fix.
+Use `shipyard_findings` for concrete defects only. During an independent/first-wave task, do not list or read peer findings before completing your own discovery; add directly. After that barrier, search first and do not paraphrase another finding. When an existing finding identifies a reusable failure class, search sibling paths and add separately only for a materially distinct trigger or fix.
 
 End with a compact receipt: execution paths traced, failure modes tested, finding IDs, and untested runtime gaps.

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ensurePrivateDir, writeJsonAtomic, writeTextAtomic } from "../core/json.ts";
+import { dynamicStateRoots, legacyDynamicStateRoots } from "../core/paths.ts";
 import { safePathSegment } from "../core/sanitize.ts";
 import { normalizeWorkflowName, workflowSourceHash } from "./manifest.ts";
 import type { WorkflowManifest, WorkflowRunSnapshot, WorkflowScope, WorkflowSource } from "./types.ts";
@@ -60,23 +61,33 @@ export class WorkflowStore {
 	readonly draftRoot: string;
 	readonly runsRoot: string;
 	readonly trustPath: string;
+	readonly legacyUserRoot?: string;
+	readonly legacyDraftRoot?: string;
+	readonly legacyRunsRoot?: string;
+	readonly legacyTrustPath?: string;
 
 	constructor(options: WorkflowStoreOptions) {
 		this.agentDir = path.resolve(options.agentDir);
 		this.cwd = path.resolve(options.cwd);
 		this.sessionId = safePathSegment(options.sessionId);
 		this.projectTrusted = options.projectTrusted;
-		this.userRoot = path.join(this.agentDir, "workflows");
+		const roots = dynamicStateRoots(this.agentDir);
+		const legacy = legacyDynamicStateRoots(this.agentDir);
+		this.userRoot = roots.savedRoot;
 		this.projectRoot = path.join(this.cwd, options.configDirName, "workflows");
-		this.draftRoot = path.join(this.agentDir, "workflow-drafts", this.sessionId);
-		this.runsRoot = path.join(this.agentDir, "workflow-runs", this.sessionId);
-		this.trustPath = path.join(this.agentDir, "workflow-trust.json");
+		this.draftRoot = path.join(roots.draftsRoot, this.sessionId);
+		this.runsRoot = path.join(roots.runsRoot, this.sessionId);
+		this.trustPath = roots.trustPath;
+		this.legacyUserRoot = legacy.savedRoot;
+		this.legacyDraftRoot = path.join(legacy.draftsRoot, this.sessionId);
+		this.legacyRunsRoot = path.join(legacy.runsRoot, this.sessionId);
+		this.legacyTrustPath = legacy.trustPath;
 	}
 
 	stage(nameInput: string, source: string, manifest: WorkflowManifest): WorkflowSource {
 		const name = normalizeWorkflowName(nameInput);
 		if (manifest.name !== name) {
-			throw new Error(`Workflow source defines '${manifest.name}', but workflow_create requested '${name}'.`);
+			throw new Error(`Workflow source defines '${manifest.name}', but dynamic_create requested '${name}'.`);
 		}
 		const normalizedSource = source.endsWith("\n") ? source : `${source}\n`;
 		const hash = workflowSourceHash(normalizedSource);
@@ -107,7 +118,8 @@ export class WorkflowStore {
 	}
 
 	resolve(name: string): WorkflowSource {
-		const draft = this.readFromRoot(this.draftRoot, "draft", name);
+		const draft = this.readFromRoot(this.draftRoot, "draft", name)
+			?? (this.legacyDraftRoot ? this.readFromRoot(this.legacyDraftRoot, "draft", name) : undefined);
 		if (draft) return draft;
 		return this.resolveSaved(name);
 	}
@@ -115,7 +127,8 @@ export class WorkflowStore {
 	resolveSaved(name: string): WorkflowSource {
 		const project = this.projectTrusted ? this.readFromRoot(this.projectRoot, "project", name) : undefined;
 		if (project) return project;
-		const user = this.readFromRoot(this.userRoot, "user", name);
+		const user = this.readFromRoot(this.userRoot, "user", name)
+			?? (this.legacyUserRoot ? this.readFromRoot(this.legacyUserRoot, "user", name) : undefined);
 		if (user) return user;
 		throw new Error(`Saved workflow '${name}' was not found in project or user workflows.`);
 	}
@@ -123,6 +136,7 @@ export class WorkflowStore {
 	listSaved(): WorkflowSource[] {
 		const byName = new Map<string, WorkflowSource>();
 		for (const [root, scope] of [
+			...(this.legacyUserRoot ? [[this.legacyUserRoot, "user"] as const] : []),
 			[this.userRoot, "user"],
 			...(this.projectTrusted ? [[this.projectRoot, "project"] as const] : []),
 		] as Array<readonly [string, "user" | "project"]>) {
@@ -137,8 +151,10 @@ export class WorkflowStore {
 	list(): WorkflowSource[] {
 		const byName = new Map<string, WorkflowSource>();
 		const roots: Array<readonly [string, WorkflowScope]> = [
+			...(this.legacyUserRoot ? [[this.legacyUserRoot, "user"] as const] : []),
 			[this.userRoot, "user"],
 			...(this.projectTrusted ? [[this.projectRoot, "project"] as const] : []),
+			...(this.legacyDraftRoot ? [[this.legacyDraftRoot, "draft"] as const] : []),
 			[this.draftRoot, "draft"],
 		];
 		for (const [root, scope] of roots) {
@@ -210,34 +226,39 @@ export class WorkflowStore {
 	}
 
 	readRunStatus(id: string): WorkflowRunSnapshot | undefined {
-		try {
-			return readJson<WorkflowRunSnapshot>(path.join(this.runsRoot, safePathSegment(id), "status.json"));
-		} catch {
-			return undefined;
+		for (const root of [this.runsRoot, ...(this.legacyRunsRoot ? [this.legacyRunsRoot] : [])]) {
+			try {
+				return readJson<WorkflowRunSnapshot>(path.join(root, safePathSegment(id), "status.json"));
+			} catch {
+				// Try the next root.
+			}
 		}
+		return undefined;
 	}
 
 	listRunStatuses(): WorkflowRunSnapshot[] {
-		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(this.runsRoot, { withFileTypes: true }); } catch { return []; }
-		return entries
-			.filter((entry) => entry.isDirectory())
-			.flatMap((entry) => {
+		const byId = new Map<string, WorkflowRunSnapshot>();
+		for (const root of [...(this.legacyRunsRoot ? [this.legacyRunsRoot] : []), this.runsRoot]) {
+			let entries: fs.Dirent[];
+			try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+			for (const entry of entries.filter((candidate) => candidate.isDirectory())) {
 				const status = this.readRunStatus(entry.name);
-				return status ? [status] : [];
-			})
-			.sort((a, b) => b.createdAt - a.createdAt);
+				if (status) byId.set(status.id, status);
+			}
+		}
+		return [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
 	}
 
 	private readTrust(): TrustFile {
-		try {
-			const trust = readJson<TrustFile>(this.trustPath);
-			return trust.version === 1 && trust.entries && typeof trust.entries === "object"
-				? trust
-				: { version: 1, entries: {} };
-		} catch {
-			return { version: 1, entries: {} };
+		for (const file of [this.trustPath, ...(this.legacyTrustPath ? [this.legacyTrustPath] : [])]) {
+			try {
+				const trust = readJson<TrustFile>(file);
+				if (trust.version === 1 && trust.entries && typeof trust.entries === "object") return trust;
+			} catch {
+				// Try the next trust location.
+			}
 		}
+		return { version: 1, entries: {} };
 	}
 
 	isTrusted(workflow: Pick<WorkflowSource, "path" | "hash">): boolean {

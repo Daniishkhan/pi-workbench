@@ -2,7 +2,7 @@
 name: shipwright
 package: pi-shipyard
 description: Performs final repository-aware validation and prepares an auditable shipping handoff without assuming commit, push, publish, or deploy authority
-tools: read, grep, find, ls, bash, review_findings, shipyard_repo
+tools: read, grep, find, ls, bash, shipyard_findings, shipyard_repo
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

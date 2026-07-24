@@ -9,15 +9,22 @@ test("defaults to Shipyard and Teams enabled with Dynamic Workflows disabled", (
 	assert.equal(config.writerGuard.enabled, true);
 });
 
-test("accepts explicit module flags and sanitized role bindings", () => {
+test("accepts explicit module flags, dynamic policy, and sanitized role bindings", () => {
 	const config = resolveWorkbenchConfig({
 		modules: { shipyard: false, agentTeams: false, dynamicWorkflows: true },
 		shipyard: { agentBindings: { "pi-shipyard.codebase-reader": "custom.reader", bad: 42, empty: " " } },
+		dynamic: { defaultSize: "medium", maxConcurrency: 2 },
 		writerGuard: { enabled: false },
 	});
 	assert.deepEqual(config.modules, { shipyard: false, agentTeams: false, dynamicWorkflows: true });
 	assert.deepEqual(config.shipyard.agentBindings, { "pi-shipyard.codebase-reader": "custom.reader" });
+	assert.deepEqual(config.dynamic, { defaultSize: "medium", maxConcurrency: 2 });
 	assert.equal(config.writerGuard.enabled, false);
+});
+
+test("a non-object dynamic section fails back to the empty default", () => {
+	const config = resolveWorkbenchConfig({ dynamic: ["not", "an", "object"] });
+	assert.deepEqual(config.dynamic, {});
 });
 
 test("malformed values fail back to conservative defaults", () => {

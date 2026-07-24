@@ -3,6 +3,46 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ROLE_POLICIES } from "../core/role-policy.ts";
 
+/** Pinned runtime agent files carry the owning process pid in their name so a
+ * later session can reap definitions whose process died without dispose(). */
+const PINNED_AGENT_FILE_PATTERN = /^pi-workbench-dynamic-runtime-(?:reader|verifier)-(\d+)-[0-9a-f]{32}\.md$/;
+
+function defaultProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** Best-effort janitor: delete pinned dynamic-runtime agent definitions left
+ * behind by dead Pi processes. Returns the number of files removed. */
+export function sweepStalePinnedAgents(agentDir: string, processAlive: (pid: number) => boolean = defaultProcessAlive): number {
+	const agentsDir = path.join(agentDir, "agents");
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+	} catch {
+		return 0;
+	}
+	let swept = 0;
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const match = PINNED_AGENT_FILE_PATTERN.exec(entry.name);
+		if (!match) continue;
+		const pid = Number(match[1]);
+		if (!Number.isSafeInteger(pid) || pid <= 0 || processAlive(pid)) continue;
+		try {
+			fs.unlinkSync(path.join(agentsDir, entry.name));
+			swept += 1;
+		} catch {
+			// Another session may be sweeping the same file; leave it.
+		}
+	}
+	return swept;
+}
+
 /** Logical read-only roles a dynamic workflow may reference are derived from
  * the shared role policy: read-only capability plus the dynamic surface.
  * pi-workbench.reviewer is excluded — it maps to the verifier definition. */

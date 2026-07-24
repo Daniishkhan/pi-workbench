@@ -1,11 +1,11 @@
 ---
 name: shipyard-review-findings
-description: Record, verify, reject, and synthesize evidence-backed software review findings using Shipyard's shared review_findings ledger. Use during Shipyard review, validation, falsification, blind-spot, and synthesis workflows.
+description: Record, verify, reject, and synthesize evidence-backed software review findings using Shipyard's shared shipyard_findings ledger. Use during Shipyard review, validation, falsification, blind-spot, and synthesis workflows.
 ---
 
 # Shipyard review findings
 
-Use the `review_findings` tool with the exact absolute `store` path and findings `capability` supplied in the task. Pass the capability unchanged on every ledger call, never copy it into an artifact/finding, and never try to discover another stage's capability. Shipyard constrains the store to a private run directory under the user's Pi agent directory and binds workflow actions, creation stage, and source role to the capability. The store is the cross-agent handoff; do not substitute a repo-local TODO, prose-only summary, or guessed path.
+Use the `shipyard_findings` tool with the exact absolute `store` path and findings `capability` supplied in the task. Pass the capability unchanged on every ledger call, never copy it into an artifact/finding, and never try to discover another stage's capability. Shipyard constrains the store to a private run directory under the user's Pi agent directory and binds workflow actions, creation stage, and source role to the capability. The store is the cross-agent handoff; do not substitute a repo-local TODO, prose-only summary, or guessed path.
 
 ## Finding threshold
 

@@ -1,5 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { WorkbenchConfig } from "./core/config.ts";
 import { isChildSession } from "./core/env.ts";
@@ -76,7 +77,6 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 				agent: route.agent,
 				task,
 				cwd: ctx.cwd,
-				context: mode === "implement" ? "fork" : "fresh",
 				async: true,
 				clarify: false,
 				artifacts: true,
@@ -125,8 +125,8 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 			}
 			return {
 				mode,
-				message: "Dynamic route selected. Use workflow_control for lifecycle or saved-definition requests; otherwise author a bounded read-only workflow with workflow_create, then call workflow_run for exact-source human approval.",
-				nextAction: { tools: ["workflow_control", "workflow_create", "workflow_run"], task: target },
+				message: "Dynamic route selected. Use dynamic_control for lifecycle or saved-definition requests; otherwise author a bounded read-only workflow with dynamic_create, then call dynamic_run for exact-source human approval.",
+				nextAction: { tools: ["dynamic_control", "dynamic_create", "dynamic_run"], task: target },
 			};
 		}
 		throw new Error(`Unsupported Workbench mode: ${mode}`);
@@ -145,6 +145,17 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		async execute(_id, params, signal, _onUpdate, ctx) {
 			const result = await dispatch(ctx, params.mode as WorkbenchMode, params.task, params.agent, params.model, signal);
 			return textResult(result.message, result);
+		},
+		renderCall(args, theme) {
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("workbench "))}${theme.fg("accent", args.mode)}${args.task ? theme.fg("dim", ` ${args.task.length > 60 ? `${args.task.slice(0, 60)}…` : args.task}`) : ""}`,
+				0,
+				0,
+			);
+		},
+		renderResult(result, _options, theme) {
+			const text = result.content.find((part) => part.type === "text");
+			return new Text(theme.fg("success", text?.type === "text" ? text.text : "Route dispatched."), 0, 0);
 		},
 	});
 
@@ -180,7 +191,7 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 				if (!target) throw new Error(`Workbench mode '${mode}' requires a task.`);
 				const prompt = mode === "team"
 					? `Use Agent Teams for this goal. Create one team, partition 2-5 separable tasks, prefer read-only scouts, and allow only one writer in this cwd. Goal:\n\n${target}`
-					: `Use Workbench Dynamic mode for this request. If it concerns an existing run or saved definition, use workflow_control. Otherwise create a bounded read-only workflow with workflow_create, then call workflow_run for exact-source approval. Request:\n\n${target}`;
+					: `Use Workbench Dynamic mode for this request. If it concerns an existing run or saved definition, use dynamic_control. Otherwise create a bounded read-only workflow with dynamic_create, then call dynamic_run for exact-source approval. Request:\n\n${target}`;
 				if (ctx.isIdle()) pi.sendUserMessage(prompt);
 				else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 				return;

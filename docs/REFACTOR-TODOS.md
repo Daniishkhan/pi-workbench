@@ -44,20 +44,22 @@ Rule for every phase: `npm test` stays green. Phases 1–2 must be invisible to 
 
 Validation: 126 tests green, `npm run check`, `npm pack --dry-run`, `pi -e . --list-models` all pass.
 
-## Phase 3 — naming/config/state unification (user-visible, behind migration)
-- [ ] One config file: `dynamic:` section in workbench config; legacy `extensions/dynamic-workflows/config.json` read as fallback + deprecation warning
-- [ ] One state root `~/.pi/agent/workbench/{shipyard/{runs,context},teams,dynamic/{saved,drafts,runs},writer-leases}`; legacy locations read as fallback
-- [ ] Tool renames: `review_findings` → `shipyard_findings`; `workflow_*` → `dynamic_*` (or commit to `workflow_*` and rename Shipyard's workflows.ts)
-- [ ] Custom types to `pi-workbench:<module>:<thing>`; `PI_AGENT_TEAMS_ROOT` → `PI_WORKBENCH_TEAMS_ROOT` (fallback)
-- [ ] Decide agent namespaces: keep `pi-shipyard.*` as documented brand, merge `pi-agent-teams.*`; extend migrate-settings.mjs to rewrite `agentOverrides` keys
-- [ ] Fix mode/file-name asymmetry (`fast`→review-fast, `compact`→deliver-compact)
-- [ ] teamsRoot honors `getAgentDir()` (currently hardcodes `~/.pi/agent` — bug); core/config `defaultAgentDir()` deleted in favor of pi's `getAgentDir()`
+## Phase 3 — naming/config/state unification (user-visible, behind migration) ✅ DONE
+- [x] One config file: `dynamic:` section in workbench config; legacy `extensions/dynamic-workflows/config.json` read as fallback + deprecation warning
+- [x] One state root `~/.pi/agent/workbench/{shipyard/{runs,context},teams,dynamic/{saved,drafts,runs},writer-leases}`; legacy locations read as fallback
+- [x] Tool renames: `review_findings` → `shipyard_findings`; `workflow_*` → `dynamic_*` (chose the `dynamic_*` rename; Shipyard's internal workflows.ts unchanged)
+- [x] Custom types to `pi-workbench:<module>:<thing>` (`pi-workbench:teams:active`, `pi-workbench:teams:mail`, `pi-workbench:dynamic:complete`, `pi-workbench:dynamic:run`); `PI_WORKBENCH_TEAMS_ROOT` with `PI_AGENT_TEAMS_ROOT` fallback
+- [x] Agent namespaces: kept `pi-shipyard.*` as documented brand; merged `pi-agent-teams.{scout,teammate}` → `pi-workbench.teams-{scout,teammate}`; migrate-settings.mjs rewrites `agentOverrides` keys
+- [x] Fixed mode/file-name asymmetry (`review-fast.chain.json`→`fast.chain.json`, `deliver-compact.chain.json`→`compact.chain.json`); validator rules are catalog-driven
+- [x] teamsRoot honors `getAgentDir()`; core/config `defaultAgentDir()` deleted in favor of pi's `getAgentDir()` (new `core/paths.ts` owns all state locations)
 
-## Phase 4 — contract hardening
-- [ ] Register `pi-subagents/background-work` provider for dynamic workflow runs (headless auto-drain/subagent_wait visibility)
-- [ ] Self-healing lease acquire: check blocking lease's runId via RPC status, reap terminal leases instead of throwing
-- [ ] Memoize `findOwnIdentity()` in child sessions
-- [ ] Pinned-agent janitor: sweep stale `pi-workbench-dynamic-runtime-*.md` on startup
-- [ ] Surface dynamic runtime init errors at session_start (not just "Run /reload" at tool time)
-- [ ] Drop router's hardcoded `context:` override; let agent frontmatter `defaultContext` govern
-- [ ] promptSnippet/promptGuidelines for shipyard tools; renderCall/renderResult for workbench_route
+## Phase 4 — contract hardening ✅ DONE
+- [x] Register `pi-subagents/background-work` provider for dynamic workflow runs (headless auto-drain/subagent_wait visibility); injected from the composition root so strip-types tests never load node_modules TS
+- [x] Self-healing lease acquire: blocking lease's runId checked via RPC status, terminal leases reaped + acquire retried once (in `beginGuardedSpawn`)
+- [x] Memoize `findOwnIdentity()` in child sessions (successful resolutions)
+- [x] Pinned-agent janitor: `sweepStalePinnedAgents` reaps `pi-workbench-dynamic-runtime-*.md` whose owning pid is dead, on dynamic runtime init
+- [x] Surface dynamic runtime init errors at session_start (UI notify + recorded cause rethrown by tool calls)
+- [x] Drop router's hardcoded `context:` override; agent frontmatter `defaultContext` governs
+- [x] promptSnippet/promptGuidelines for shipyard tools (`shipyard_findings`, `shipyard_repo`, `shipyard_context*`); renderCall/renderResult for workbench_route
+
+Validation: 156 tests green, `npm run check`, `npm pack --dry-run`, `pi -e . --list-models` all pass.

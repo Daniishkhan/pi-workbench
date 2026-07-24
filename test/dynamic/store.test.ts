@@ -50,11 +50,15 @@ test("stages exact normalized source bytes and resolves drafts first", () => {
 
 test("preserves Workbench workflow, draft, run, and trust roots", () => {
 	const { root, store } = makeStore(true);
-	assert.equal(store.userRoot, path.join(root, "agent", "workflows"));
+	assert.equal(store.userRoot, path.join(root, "agent", "workbench", "dynamic", "saved"));
 	assert.equal(store.projectRoot, path.join(root, "project", ".pi", "workflows"));
-	assert.equal(store.draftRoot, path.join(root, "agent", "workflow-drafts", "session-1"));
-	assert.equal(store.runsRoot, path.join(root, "agent", "workflow-runs", "session-1"));
-	assert.equal(store.trustPath, path.join(root, "agent", "workflow-trust.json"));
+	assert.equal(store.draftRoot, path.join(root, "agent", "workbench", "dynamic", "drafts", "session-1"));
+	assert.equal(store.runsRoot, path.join(root, "agent", "workbench", "dynamic", "runs", "session-1"));
+	assert.equal(store.trustPath, path.join(root, "agent", "workbench", "dynamic", "trust.json"));
+	assert.equal(store.legacyUserRoot, path.join(root, "agent", "workflows"));
+	assert.equal(store.legacyDraftRoot, path.join(root, "agent", "workflow-drafts", "session-1"));
+	assert.equal(store.legacyRunsRoot, path.join(root, "agent", "workflow-runs", "session-1"));
+	assert.equal(store.legacyTrustPath, path.join(root, "agent", "workflow-trust.json"));
 });
 
 test("saved-only resolution and listings cannot be shadowed by drafts", () => {
@@ -114,6 +118,60 @@ test("rejects non-finite and undefined JSON persistence instead of coercing valu
 	assert.throws(() => writeJsonAtomic(file, { bad: Number.POSITIVE_INFINITY }), /non-finite JSON number/);
 	assert.throws(() => writeJsonAtomic(file, undefined), /undefined JSON root/);
 	assert.equal(fs.existsSync(file), false);
+});
+
+test("reads legacy pre-unification saved workflows, run statuses, and trust as a fallback", () => {
+	const { root, store } = makeStore(true);
+	const raw = source("legacy-flow");
+	const normalized = `${raw}\n`;
+	const manifest = compileWorkflowSource(raw).manifest;
+	const hash = workflowSourceHash(normalized);
+
+	// Seed the legacy (pre-unification) saved-workflow root directly.
+	const legacySaved = path.join(root, "agent", "workflows");
+	fs.mkdirSync(legacySaved, { recursive: true });
+	const legacySourcePath = path.join(legacySaved, "legacy-flow.workflow.js");
+	fs.writeFileSync(legacySourcePath, normalized);
+	writeJsonAtomic(path.join(legacySaved, "legacy-flow.workflow.json"), {
+		version: 1,
+		name: "legacy-flow",
+		hash,
+		manifest,
+		updatedAt: Date.now(),
+	});
+
+	const resolved = store.resolveSaved("legacy-flow");
+	assert.equal(resolved.scope, "user");
+	assert.equal(resolved.path, legacySourcePath);
+	assert.deepEqual(store.listSaved().map((entry) => entry.name), ["legacy-flow"]);
+
+	// Legacy trust entries keyed by the legacy path are honored.
+	writeJsonAtomic(path.join(root, "agent", "workflow-trust.json"), {
+		version: 1,
+		entries: { [path.resolve(legacySourcePath)]: { hash, trustedAt: Date.now() } },
+	});
+	assert.equal(store.isTrusted({ path: legacySourcePath, hash }), true);
+	assert.equal(store.isTrusted({ path: legacySourcePath, hash: "tampered" }), false);
+
+	// Legacy run statuses remain inspectable.
+	const legacyRunDir = path.join(root, "agent", "workflow-runs", "session-1", "wf-legacy");
+	fs.mkdirSync(legacyRunDir, { recursive: true });
+	const snapshot = {
+		version: 1, id: "wf-legacy", name: "legacy-flow", state: "completed", scope: "user",
+		sourcePath: legacySourcePath, sourceHash: hash, runDir: legacyRunDir, cwd: store.cwd,
+		sessionId: "session-1", manifest, policy: { maxAgents: 1, maxConcurrency: 1, timeoutMs: 1, maxIntermediateBytes: 1, maxResultBytes: 1 },
+		createdAt: 1, phases: [], agentsLaunched: 0, agentsCompleted: 0, activeAgents: [], background: false,
+	};
+	writeJsonAtomic(path.join(legacyRunDir, "status.json"), snapshot);
+	assert.equal(store.readRunStatus("wf-legacy")?.state, "completed");
+	assert.deepEqual(store.listRunStatuses().map((entry) => entry.id), ["wf-legacy"]);
+
+	// A same-named workflow in the unified root shadows the legacy copy.
+	const staged = store.stage("legacy-flow", raw, manifest);
+	store.saveDraft("legacy-flow", "user");
+	assert.equal(store.resolveSaved("legacy-flow").path, path.join(store.userRoot, "legacy-flow.workflow.js"));
+	assert.equal(store.listSaved().length, 1);
+	assert.equal(staged.scope, "draft");
 });
 
 test("persists private run state and can read it back", () => {

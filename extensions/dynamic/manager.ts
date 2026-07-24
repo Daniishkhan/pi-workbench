@@ -366,6 +366,13 @@ export class WorkflowManager {
 		return [...this.#history.values()].map(snapshotCopy).sort((a, b) => b.createdAt - a.createdAt);
 	}
 
+	/** Snapshots of runs that may still produce work (non-terminal states). */
+	listActive(): WorkflowRunSnapshot[] {
+		return [...this.#runs.values()]
+			.filter((run) => !["completed", "failed", "stopped"].includes(run.snapshot.state))
+			.map((run) => snapshotCopy(run.snapshot));
+	}
+
 	pause(id?: string): WorkflowRunSnapshot {
 		const run = this.#requireActive(id);
 		run.pauseRequested = true;

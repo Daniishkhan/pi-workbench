@@ -64,7 +64,7 @@ class FakeRpc {
 }
 
 function activeEntry(team: string | null) {
-	return { type: "custom", customType: "pi-agent-teams:active", data: { team } };
+	return { type: "custom", customType: "pi-workbench:teams:active", data: { team } };
 }
 
 function context(sessionId: string, initialBranch: unknown[] = []) {
@@ -97,7 +97,7 @@ function addMember(dir: string, input: { name: string; runId: string; status?: M
 			name: input.name,
 			role: "test",
 			task: "test",
-			agent: "pi-agent-teams.scout",
+			agent: "pi-workbench.teams-scout",
 			runId: input.runId,
 			status: input.status ?? "running",
 			spawns: 1,
@@ -203,7 +203,7 @@ test("team_spawn rejects unknown read-only self-attestation and unauthenticated 
 	);
 	assert.equal(rpc.calls.length, 0);
 	await assert.rejects(
-		() => execute(pi, "team_spawn", { name: "scout", role: "test", task: "test", agent: "pi-agent-teams.scout", write: false }, harness.ctx),
+		() => execute(pi, "team_spawn", { name: "scout", role: "test", task: "test", agent: "pi-workbench.teams-scout", write: false }, harness.ctx),
 		/accepted without a run id/,
 	);
 	assert.deepEqual(store.loadConfig(dir).members, []);
@@ -269,6 +269,6 @@ test("fully acknowledged disband closes only after terminal completion and retai
 	assert.equal(closed.closing, false);
 	assert.equal(closed.members[0]?.status, "stopped");
 	assert.deepEqual(releasedRuns, ["closing-alice"]);
-	assert.deepEqual(pi.entries.at(-1), { type: "pi-agent-teams:active", data: { team: null } });
+	assert.deepEqual(pi.entries.at(-1), { type: "pi-workbench:teams:active", data: { team: null } });
 	await pi.emitLifecycle("session_shutdown", harness.ctx);
 });

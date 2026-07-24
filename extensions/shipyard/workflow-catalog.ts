@@ -35,7 +35,7 @@ export const SHIPYARD_WORKFLOWS: Readonly<Record<ShipyardWorkflowName, ShipyardW
 		mutating: false,
 	},
 	fast: {
-		file: "review-fast.chain.json",
+		file: "fast.chain.json",
 		timeoutMs: 20 * 60_000,
 		findings: true,
 		mutating: false,
@@ -63,7 +63,7 @@ export const SHIPYARD_WORKFLOWS: Readonly<Record<ShipyardWorkflowName, ShipyardW
 		defaultTask: "Review the current UI worktree diff for behavior, state-flow, accessibility, interaction, and visual regressions.",
 	},
 	compact: {
-		file: "deliver-compact.chain.json",
+		file: "compact.chain.json",
 		timeoutMs: 60 * 60_000,
 		findings: true,
 		mutating: true,

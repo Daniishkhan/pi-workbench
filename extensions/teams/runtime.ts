@@ -14,10 +14,10 @@ import {
 	type TeamConfig,
 } from "./store.ts";
 
-export const TEAMMATE_AGENT = "pi-agent-teams.teammate";
+export const TEAMMATE_AGENT = "pi-workbench.teams-teammate";
 export const ASYNC_COMPLETE_EVENT = "subagent:async-complete";
-export const ACTIVE_ENTRY = "pi-agent-teams:active";
-export const MAIL_CUSTOM_TYPE = "pi-agent-teams";
+export const ACTIVE_ENTRY = "pi-workbench:teams:active";
+export const MAIL_CUSTOM_TYPE = "pi-workbench:teams:mail";
 export const POLL_MS = 3_000;
 export const SUMMARY_MAX = 800;
 /** Lead mail delivery is batched and throttled so chatty teammates cannot
