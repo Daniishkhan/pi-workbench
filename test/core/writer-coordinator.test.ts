@@ -20,7 +20,7 @@ test("excludes a second writer for the same cwd across coordinator instances", (
 	const cwd = path.join(rootDir, "repo");
 	const first = new WriterCoordinator({ rootDir, pid: 100, processAlive: () => true });
 	const second = new WriterCoordinator({ rootDir, pid: 200, processAlive: () => true });
-	const lease = first.acquire(cwd, "shipyard:deliver")!;
+	const lease = first.acquire(cwd, "workbench:deliver")!;
 	assert.throws(() => second.acquire(cwd, "team:writer"), /already owns/);
 	first.attachRun(lease.token, "run-1");
 	assert.equal(second.list()[0]?.runId, "run-1");

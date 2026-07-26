@@ -1,0 +1,71 @@
+{
+  "name": "deliver",
+  "package": "pi-workbench",
+  "description": "One-writer delivery loop: plan, implement, independent review, supported fixes, and final verification.",
+  "chain": [
+    {
+      "agent": "pi-workbench.planner",
+      "phase": "Plan",
+      "label": "Plan the change",
+      "as": "plan",
+      "task": "Create an implementation-ready plan for: {task}\n\nInspect repository instructions and the governing source, callers, tests, and configuration. Classify the work as a feature, bug, refactor, or mechanical change and scale the method accordingly. For a bug, identify expected versus observed behavior and the causal seam or name the missing reproduction evidence. For a refactor, state behavior and compatibility invariants. Define the smallest coherent change, explicit non-goals, global constraints, affected interfaces and paths, risks, cleanup behavior, and exact validation. Choose a focused failing regression or contract test when it has real evidence value; otherwise specify characterization coverage or the strongest relevant non-test validation. Do not edit files. Keep the plan compact.",
+      "output": "plan.md",
+      "outputMode": "file-only",
+      "progress": false
+    },
+    {
+      "agent": "pi-workbench.worker",
+      "phase": "Implement",
+      "label": "Implement and test",
+      "as": "implementation",
+      "task": "Implement this task as the sole writer: {task}\n\nPlan: {outputs.plan}\n\nOpen and read the referenced plan, verify its critical assumptions against source, and implement only the approved scope. For a bug, reproduce narrowly when safe or confirm the causal trace before editing. Follow the plan's evidence strategy: witness a focused regression or contract test fail for the intended reason when feasible, use characterization coverage for risky refactors, and do not manufacture tests for prose or mechanical configuration. After the last mutation, run fresh focused validation, broaden it in proportion to blast radius, and inspect the current diff. Never weaken an assertion merely to make checks pass. Do not commit or push. Return a compact handoff with changes, commands, exit status or direct results, decisions, limitations, and residual risks.",
+      "output": "implementation.md",
+      "outputMode": "file-only",
+      "progress": false
+    },
+    {
+      "phase": "Independent review",
+      "parallel": [
+        {
+          "agent": "pi-workbench.reviewer",
+          "label": "Correctness and runtime review",
+          "as": "correctness",
+          "task": "Review the implementation for specification compliance, correctness, causal validity, integration, runtime, error, cleanup, cancellation, ordering, and concurrency defects.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\n\nOpen and read every referenced artifact, treat its claims as untrusted, then inspect the actual diff, source, callers, tests, and configuration independently. For bug fixes, verify the causal seam; for refactors, verify stated invariants. Report only evidence-backed defects with precise locations, failure scenarios, smallest safe fixes, and validation. Do not edit files. Keep the receipt compact.",
+          "output": "review-correctness.md",
+          "outputMode": "file-only",
+          "progress": false
+        },
+        {
+          "agent": "pi-workbench.reviewer",
+          "label": "Tests, simplicity, and applicable security review",
+          "as": "quality",
+          "task": "Review the implementation for missing regression or characterization coverage, stale or weak validation evidence, unnecessary complexity, maintainability regressions, and security issues only where a real trust boundary applies.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\n\nOpen and read every referenced artifact, treat its claims as untrusted, then inspect the actual diff, source, tests, and configuration independently. Require evidence from the current post-mutation state, but do not demand synthetic tests for prose, generated output, or mechanical configuration when a more relevant validator exists. Report only evidence-backed defects or material validation gaps with precise locations and smallest safe fixes. Do not edit files. Keep the receipt compact.",
+          "output": "review-quality.md",
+          "outputMode": "file-only",
+          "progress": false
+        }
+      ],
+      "concurrency": 2,
+      "failFast": false
+    },
+    {
+      "agent": "pi-workbench.worker",
+      "phase": "Fix",
+      "label": "Apply supported fixes",
+      "as": "fixes",
+      "task": "Reconcile review feedback once as the sole writer.\n\nTask: {task}\nPlan: {outputs.plan}\nInitial implementation: {outputs.implementation}\nCorrectness/runtime review: {outputs.correctness}\nTests/simplicity/security review: {outputs.quality}\n\nOpen and read every referenced artifact and inspect the current diff/source. Treat review claims as hypotheses: apply only supported fixes that you can verify, and make no changes if no supported findings exist. After any change, run fresh focused validation against the post-fix state and inspect the final diff; pre-fix results do not count. Do not begin another autonomous fix loop. Do not commit or push. Return a compact fix handoff, including why rejected findings were not changed.",
+      "output": "fixes.md",
+      "outputMode": "file-only",
+      "progress": false
+    },
+    {
+      "agent": "pi-workbench.reviewer",
+      "phase": "Final review",
+      "label": "Verify final state",
+      "as": "final",
+      "task": "Perform a final read-only review of the delivered state.\n\nTask: {task}\nPlan: {outputs.plan}\nInitial implementation: {outputs.implementation}\nCorrectness/runtime review: {outputs.correctness}\nTests/simplicity/security review: {outputs.quality}\nFix handoff: {outputs.fixes}\n\nOpen and read every referenced artifact, but treat every receipt as an untrusted claim. Inspect the current diff and governing source/tests, independently verify that supported findings were resolved without regressions, and require relevant validation performed after the last mutation. Return READY or NOT READY with concise evidence, remaining actionable defects, current validation evidence, and residual risks. Missing required post-fix evidence is NOT READY. Do not edit files.",
+      "outputMode": "inline",
+      "progress": false
+    }
+  ]
+}

@@ -3,66 +3,42 @@ import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface WorkbenchConfig {
-	modules: {
-		shipyard: boolean;
-		agentTeams: boolean;
-		dynamicWorkflows: boolean;
-	};
-	shipyard: {
-		agentBindings: Record<string, string>;
-	};
-	/** Raw Dynamic Workflows policy section. Resolved by dynamic/config.ts into
-	 * ResolvedDynamicWorkflowsConfig; core intentionally stays decoupled from
-	 * the dynamic module's types. */
-	dynamic: Record<string, unknown>;
 	writerGuard: {
 		enabled: boolean;
 	};
 }
 
 export const DEFAULT_WORKBENCH_CONFIG: WorkbenchConfig = {
-	modules: {
-		shipyard: true,
-		agentTeams: true,
-		dynamicWorkflows: false,
-	},
-	shipyard: {
-		agentBindings: {},
-	},
-	dynamic: {},
 	writerGuard: {
 		enabled: true,
 	},
 };
 
-function record(value: unknown): Record<string, unknown> {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+function record(value: unknown, label: string): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new TypeError(`${label} must be an object`);
+	}
+	return value as Record<string, unknown>;
 }
 
-function boolean(value: unknown, fallback: boolean): boolean {
-	return typeof value === "boolean" ? value : fallback;
+function rejectUnknownKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+	const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+	if (unknown.length > 0) throw new TypeError(`${label} contains unknown ${unknown.length === 1 ? "key" : "keys"}: ${unknown.join(", ")}`);
 }
 
 export function resolveWorkbenchConfig(input: unknown): WorkbenchConfig {
-	const root = record(input);
-	const modules = record(root.modules);
-	const shipyard = record(root.shipyard);
-	const writerGuard = record(root.writerGuard);
-	const rawBindings = record(shipyard.agentBindings);
-	const agentBindings: Record<string, string> = {};
-	for (const [role, agent] of Object.entries(rawBindings)) {
-		if (typeof agent === "string" && role.trim() && agent.trim()) agentBindings[role.trim()] = agent.trim();
+	const root = record(input, "Pi Workbench config");
+	rejectUnknownKeys(root, ["writerGuard"], "Pi Workbench config");
+	if (root.writerGuard === undefined) return structuredClone(DEFAULT_WORKBENCH_CONFIG);
+
+	const writerGuard = record(root.writerGuard, "writerGuard");
+	rejectUnknownKeys(writerGuard, ["enabled"], "writerGuard");
+	if (writerGuard.enabled !== undefined && typeof writerGuard.enabled !== "boolean") {
+		throw new TypeError("writerGuard.enabled must be a boolean");
 	}
 	return {
-		modules: {
-			shipyard: boolean(modules.shipyard, DEFAULT_WORKBENCH_CONFIG.modules.shipyard),
-			agentTeams: boolean(modules.agentTeams, DEFAULT_WORKBENCH_CONFIG.modules.agentTeams),
-			dynamicWorkflows: boolean(modules.dynamicWorkflows, DEFAULT_WORKBENCH_CONFIG.modules.dynamicWorkflows),
-		},
-		shipyard: { agentBindings },
-		dynamic: record(root.dynamic),
 		writerGuard: {
-			enabled: boolean(writerGuard.enabled, DEFAULT_WORKBENCH_CONFIG.writerGuard.enabled),
+			enabled: writerGuard.enabled ?? DEFAULT_WORKBENCH_CONFIG.writerGuard.enabled,
 		},
 	};
 }

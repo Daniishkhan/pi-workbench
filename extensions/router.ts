@@ -7,41 +7,39 @@ import { isChildSession } from "./core/env.ts";
 import { beginGuardedSpawn } from "./core/guarded-spawn.ts";
 import { textResult } from "./core/result.ts";
 import {
-	isShipyardMode,
-	routeCategory,
+	isOneOffMode,
+	isWorkflowMode,
+	limitsForMode,
 	resolveOneOffRoute,
-	SHIPYARD_WORKFLOW_NAMES,
 	WORKBENCH_MODES,
+	type OneOffMode,
 	type WorkbenchMode,
 } from "./core/routing.ts";
 import type { SubagentRpcClient } from "./core/subagent-rpc.ts";
 import type { WriterCoordinator } from "./core/writer-coordinator.ts";
-import type { ShipyardService } from "./shipyard/index.ts";
+import type { WorkflowService } from "./workflows.ts";
 
+const MAX_TASK_LENGTH = 32_768;
 const Params = Type.Object({
 	mode: StringEnum(WORKBENCH_MODES),
-	task: Type.Optional(Type.String({ maxLength: 32_768, description: "Task or target. Required except for status." })),
-	agent: Type.Optional(Type.String({ description: "Optional agent override for one-off modes." })),
-	model: Type.Optional(Type.String({ description: "Optional model override for one-off modes." })),
+	task: Type.Optional(Type.String({ maxLength: MAX_TASK_LENGTH, description: "Task or target. Required except for status." })),
+	model: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "Optional model override for one-off modes." })),
 }, { additionalProperties: false });
 
 export interface RegisterRouterOptions {
 	config: WorkbenchConfig;
-	shipyard?: ShipyardService;
+	workflows?: WorkflowService;
 	writerCoordinator: WriterCoordinator;
 	rpc: SubagentRpcClient;
 }
 
-const ONE_OFF_MODES = WORKBENCH_MODES.filter((mode) => routeCategory(mode) === "one-off");
 const ROUTE_LIST = WORKBENCH_MODES.filter((mode) => mode !== "status").join(", ");
 
 function statusText(options: RegisterRouterOptions): string {
 	const leases = options.writerCoordinator.list();
 	return [
 		"Pi Workbench",
-		`- Shipyard: ${options.config.modules.shipyard ? "enabled" : "disabled"}`,
-		`- Agent Teams: ${options.config.modules.agentTeams ? "enabled" : "disabled"}`,
-		`- Dynamic Workflows: ${options.config.modules.dynamicWorkflows ? "enabled (experimental)" : "disabled (default)"}`,
+		`- Workflow service: ${options.workflows ? "available" : "unavailable"}`,
 		`- Writer guard: ${options.config.writerGuard.enabled ? "enabled" : "disabled"}`,
 		`- Active writer leases: ${leases.length}`,
 		...leases.map((lease) => `  - ${lease.cwd}: ${lease.owner}${lease.runId ? ` (${lease.runId})` : ""}${lease.uncertain ? " [uncertain]" : ""}`),
@@ -53,16 +51,22 @@ function statusText(options: RegisterRouterOptions): string {
 export default function registerRouter(pi: ExtensionAPI, options: RegisterRouterOptions): void {
 	if (isChildSession()) return;
 	const rpc = options.rpc;
+	function normalizeModel(model: string | undefined): string | undefined {
+		if (model === undefined) return undefined;
+		const value = model.trim();
+		if (!value) throw new Error("Workbench model override must not be blank.");
+		if (value.length > 256) throw new Error("Workbench model override must be at most 256 characters.");
+		return value;
+	}
 
 	async function spawnOneOff(
 		ctx: ExtensionContext,
-		mode: WorkbenchMode,
+		mode: OneOffMode,
 		task: string,
-		agentOverride?: string,
 		model?: string,
 		signal?: AbortSignal,
 	) {
-		const route = resolveOneOffRoute(mode, agentOverride);
+		const route = resolveOneOffRoute(mode);
 		const guard = await beginGuardedSpawn({
 			rpc,
 			writerCoordinator: options.writerCoordinator,
@@ -79,10 +83,13 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 				cwd: ctx.cwd,
 				async: true,
 				clarify: false,
-				artifacts: true,
+				artifacts: false,
+				maxRuntimeMs: route.limits.timeoutMs,
+				...(route.limits.turnBudget ? { turnBudget: route.limits.turnBudget } : {}),
 				...(model ? { model } : {}),
 			},
 			signal,
+			requireRunIdMessage: `Workbench ${mode} was accepted without a run id; inspect active subagents before retrying.`,
 		});
 		return {
 			message: `${reply.data?.text?.trim() || `Launched ${route.agent}.`}${runId ? `\nRun: ${runId}` : ""}`,
@@ -96,54 +103,40 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		ctx: ExtensionContext,
 		mode: WorkbenchMode,
 		task?: string,
-		agent?: string,
 		model?: string,
 		signal?: AbortSignal,
 	) {
-		const category = routeCategory(mode);
-		if (category === "status") return { message: statusText(options), mode, nextAction: null };
+		const selectedModel = normalizeModel(model);
+		if (mode === "status") {
+			if (selectedModel) throw new Error("Workbench model override is only supported for one-off modes: inspect, plan, implement, review.");
+			return { message: statusText(options), mode, nextAction: null };
+		}
 		const target = task?.trim();
 		if (!target) throw new Error(`Workbench mode '${mode}' requires a task.`);
-		if (category === "one-off") return { mode, ...(await spawnOneOff(ctx, mode, target, agent, model, signal)), nextAction: null };
-		if (category === "shipyard") {
-			if (!options.shipyard || !options.config.modules.shipyard) throw new Error("Shipyard is disabled in Pi Workbench config.");
-			if (!isShipyardMode(mode)) throw new Error(`Workbench mode '${mode}' is not a Shipyard workflow.`);
-			const launched = await options.shipyard.workflows.spawn(ctx, mode, target, signal);
-			return { mode, ...launched, nextAction: null };
+		if (target.length > MAX_TASK_LENGTH) throw new Error(`Workbench task must be at most ${MAX_TASK_LENGTH} characters.`);
+		if (isOneOffMode(mode)) {
+			return { mode, ...(await spawnOneOff(ctx, mode, target, selectedModel, signal)), nextAction: null };
 		}
-		if (category === "team") {
-			if (!options.config.modules.agentTeams) throw new Error("Agent Teams is disabled in Pi Workbench config.");
-			return {
-				mode,
-				message: "Team route selected. Call team_create with this goal, define 2-5 separable tasks, then use team_spawn. Default to read-only scouts; Workbench permits only one writer per cwd.",
-				nextAction: { tool: "team_create", args: { goal: target } },
-			};
-		}
-		if (category === "dynamic") {
-			if (!options.config.modules.dynamicWorkflows) {
-				throw new Error("Dynamic Workflows is experimental and disabled. Enable modules.dynamicWorkflows in ~/.pi/agent/extensions/pi-workbench/config.json, then /reload.");
-			}
-			return {
-				mode,
-				message: "Dynamic route selected. Use dynamic_control for lifecycle or saved-definition requests; otherwise author a bounded read-only workflow with dynamic_create, then call dynamic_run for exact-source human approval.",
-				nextAction: { tools: ["dynamic_control", "dynamic_create", "dynamic_run"], task: target },
-			};
-		}
-		throw new Error(`Unsupported Workbench mode: ${mode}`);
+		if (!isWorkflowMode(mode)) throw new Error(`Unsupported Workbench mode: ${mode}`);
+		if (selectedModel) throw new Error("Workbench model override is only supported for one-off modes: inspect, plan, implement, review.");
+		if (!options.workflows) throw new Error("Workbench workflows are unavailable.");
+		const limits = limitsForMode(mode);
+		const launched = await options.workflows.spawn(ctx, mode, target, { timeoutMs: limits.timeoutMs }, signal);
+		return { mode, ...launched, nextAction: null };
 	}
 
 	pi.registerTool({
 		name: "workbench_route",
 		label: "Pi Workbench",
-		description: "Route work through the unified Pi Workbench. Use quick/deep/plan/implement/review-oneoff for one-off agents; Shipyard modes for fixed software workflows; team only when peers must coordinate; dynamic only for bounded data-dependent branches or loops. Never nest orchestration modes.",
-		promptSnippet: "Route delegation, Shipyard, teams, or bounded workflows through one policy layer",
+		description: "Route bounded software work to inspect, plan, implement, review, deliver, or audit. Roles and runtime limits are fixed by mode.",
+		promptSnippet: "Route bounded software work through one small policy layer",
 		promptGuidelines: [
-			"Use workbench_route for explicit orchestration selection; prefer quick or a one-off role before expensive multi-agent workflows.",
-			"Do not nest Shipyard, Agent Teams, or Dynamic Workflows inside one another.",
+			"Use the smallest route that can complete the task; reserve deliver and audit for their explicit end-to-end workflows.",
+			"Do not delegate again from a Workbench child.",
 		],
 		parameters: Params,
 		async execute(_id, params, signal, _onUpdate, ctx) {
-			const result = await dispatch(ctx, params.mode as WorkbenchMode, params.task, params.agent, params.model, signal);
+			const result = await dispatch(ctx, params.mode as WorkbenchMode, params.task, params.model, signal);
 			return textResult(result.message, result);
 		},
 		renderCall(args, theme) {
@@ -161,10 +154,7 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 
 	const HELP = [
 		"/workbench [status]",
-		`/workbench <${ONE_OFF_MODES.join("|")}> <task>`,
-		`/workbench <${SHIPYARD_WORKFLOW_NAMES.join("|")}> <task>`,
-		"/workbench team <goal>",
-		"/workbench dynamic <task>  (experimental; disabled by default)",
+		"/workbench <inspect|plan|implement|review|deliver|audit> <task>",
 		"/workbench release-writer  (manual recovery after checking the active run)",
 	].join("\n");
 
@@ -186,16 +176,6 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		}
 		const mode = rawMode as WorkbenchMode;
 		try {
-			if (mode === "team" || mode === "dynamic") {
-				const target = rest.join(" ").trim();
-				if (!target) throw new Error(`Workbench mode '${mode}' requires a task.`);
-				const prompt = mode === "team"
-					? `Use Agent Teams for this goal. Create one team, partition 2-5 separable tasks, prefer read-only scouts, and allow only one writer in this cwd. Goal:\n\n${target}`
-					: `Use Workbench Dynamic mode for this request. If it concerns an existing run or saved definition, use dynamic_control. Otherwise create a bounded read-only workflow with dynamic_create, then call dynamic_run for exact-source approval. Request:\n\n${target}`;
-				if (ctx.isIdle()) pi.sendUserMessage(prompt);
-				else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-				return;
-			}
 			const result = await dispatch(ctx, mode, rest.join(" "));
 			ctx.ui.notify(result.message, "info");
 		} catch (error) {
@@ -203,6 +183,6 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		}
 	}
 
-	pi.registerCommand("workbench", { description: "Unified Workbench router and status", handler: command });
+	pi.registerCommand("workbench", { description: "Bounded software-work router and status", handler: command });
 	pi.registerCommand("work", { description: "Alias for /workbench", handler: command });
 }

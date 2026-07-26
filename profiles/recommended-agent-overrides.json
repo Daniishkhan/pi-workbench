@@ -1,153 +1,10 @@
 {
   "schemaVersion": 1,
-  "description": "Recommended local model fleet. Agent frontmatter is model-agnostic; merge these overrides into settings.subagents.agentOverrides.",
+  "description": "Recommended local model fleet for the four bounded Workbench roles. Agent prompts remain model-agnostic.",
   "agentOverrides": {
-    "pi-workbench.teams-scout": {
-      "model": "google-vertex/gemini-3.6-flash",
-      "thinking": "low"
-    },
-    "pi-workbench.teams-teammate": {
-      "model": "openai-codex/gpt-5.6-terra",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol"
-      ]
-    },
-    "pi-shipyard.adversarial-tester": {
-      "model": "google-vertex/gemini-3.1-pro-preview",
-      "thinking": "high",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "kimi-coding/k3"
-      ]
-    },
-    "pi-shipyard.blindspot-hunter": {
-      "model": "google-vertex/gemini-3.1-pro-preview",
-      "thinking": "high",
-      "fallbackModels": [
-        "kimi-coding/k3",
-        "openai-codex/gpt-5.6-sol"
-      ]
-    },
-    "pi-shipyard.codebase-explorer": {
-      "model": "google-vertex/gemini-3.6-flash",
-      "thinking": "high",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol"
-      ]
-    },
-    "pi-shipyard.codebase-reader": {
-      "model": "google-vertex/gemini-3.6-flash",
-      "thinking": "high",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol"
-      ]
-    },
-    "pi-shipyard.contract-reviewer": {
-      "model": "openai-codex/gpt-5.6-sol",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "kimi-coding/k3",
-        "google-vertex/gemini-3.6-flash"
-      ]
-    },
-    "pi-shipyard.debugger": {
-      "model": "openai-codex/gpt-5.6-sol",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "kimi-coding/k3",
-        "google-vertex/gemini-3.1-pro-preview"
-      ]
-    },
-    "pi-shipyard.delivery-planner": {
-      "model": "openai-codex/gpt-5.6-sol",
-      "thinking": "high",
-      "fallbackModels": [
-        "kimi-coding/k3",
-        "openai-codex/gpt-5.6-terra"
-      ]
-    },
-    "pi-shipyard.falsifier": {
-      "model": "kimi-coding/k3",
-      "thinking": "high",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "google-vertex/gemini-3.6-flash"
-      ]
-    },
-    "pi-shipyard.implementation-worker": {
-      "model": "openai-codex/gpt-5.6-terra",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "kimi-coding/k3"
-      ]
-    },
-    "pi-shipyard.integration-reviewer": {
-      "model": "openai-codex/gpt-5.6-luna",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "google-vertex/gemini-3.1-pro-preview"
-      ]
-    },
-    "pi-shipyard.review-synthesizer": {
-      "model": "openai-codex/gpt-5.6-sol",
-      "thinking": "high",
-      "fallbackModels": [
-        "kimi-coding/k3",
-        "google-vertex/gemini-3.6-flash"
-      ]
-    },
-    "pi-shipyard.runtime-reviewer": {
-      "model": "kimi-coding/k3",
-      "thinking": "high",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "google-vertex/gemini-3.6-flash"
-      ]
-    },
-    "pi-shipyard.security-reviewer": {
-      "model": "google-vertex/gemini-3.1-pro-preview",
-      "thinking": "high",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "kimi-coding/k3"
-      ]
-    },
-    "pi-shipyard.shipwright": {
-      "model": "openai-codex/gpt-5.6-sol",
-      "thinking": "high",
-      "fallbackModels": [
-        "kimi-coding/k3",
-        "google-vertex/gemini-3.6-flash"
-      ]
-    },
-    "pi-shipyard.ui-reviewer": {
-      "model": "google-vertex/gemini-3.1-pro-preview",
-      "thinking": "high",
-      "fallbackModels": [
-        "google-vertex/gemini-3.6-flash",
-        "openai-codex/gpt-5.6-sol"
-      ]
-    },
-    "pi-workbench.deep-reader": {
-      "model": "openai-codex/gpt-5.6-terra",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol"
-      ]
-    },
     "pi-workbench.fast-scout": {
       "model": "google-vertex/gemini-3.6-flash",
       "thinking": "low"
-    },
-    "pi-workbench.oracle": {
-      "model": "openai-codex/gpt-5.6-sol",
-      "thinking": "high",
-      "fallbackModels": [
-        "kimi-coding/k3"
-      ]
     },
     "pi-workbench.planner": {
       "model": "openai-codex/gpt-5.6-sol",
@@ -156,9 +13,13 @@
         "openai-codex/gpt-5.6-terra"
       ]
     },
-    "pi-workbench.researcher": {
-      "model": "google-vertex/gemini-3.6-flash",
-      "thinking": "high"
+    "pi-workbench.worker": {
+      "model": "openai-codex/gpt-5.6-terra",
+      "thinking": "xhigh",
+      "fallbackModels": [
+        "openai-codex/gpt-5.6-sol",
+        "kimi-coding/k3"
+      ]
     },
     "pi-workbench.reviewer": {
       "model": "openai-codex/gpt-5.6-sol",
@@ -166,14 +27,6 @@
       "fallbackModels": [
         "kimi-coding/k3",
         "google-vertex/gemini-3.6-flash"
-      ]
-    },
-    "pi-workbench.worker": {
-      "model": "openai-codex/gpt-5.6-terra",
-      "thinking": "xhigh",
-      "fallbackModels": [
-        "openai-codex/gpt-5.6-sol",
-        "kimi-coding/k3"
       ]
     }
   }

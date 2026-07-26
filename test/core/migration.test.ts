@@ -52,19 +52,26 @@ test("builds an exact package replacement while preserving unrelated settings an
 	);
 });
 
-test("rewrites legacy agent override keys to the unified Workbench namespace", () => {
+test("drops overrides for removed orchestration agents", () => {
 	const { value } = fixture();
 	value.subagents.agentOverrides["pi-agent-teams.scout"] = { model: "legacy/scout" };
 	value.subagents.agentOverrides["pi-agent-teams.teammate"] = { model: "legacy/teammate", thinking: "high" };
-	const migrated = buildMigratedSettings(value, {});
+	value.subagents.agentOverrides["pi-workbench.deep-reader"] = { model: "legacy/deep-reader" };
+	value.subagents.agentOverrides["pi-workbench.teams-scout"] = { model: "legacy/teams-scout" };
+	value.subagents.agentOverrides["pi-shipyard.falsifier"] = { model: "legacy/falsifier" };
+	const migrated = buildMigratedSettings(value, {
+		"pi-workbench.worker": { model: "recommended/worker" },
+		"pi-shipyard.shipwright": { model: "obsolete/profile" },
+	});
 	const overrides = migrated.subagents.agentOverrides;
 	assert.equal(overrides["pi-agent-teams.scout"], undefined);
 	assert.equal(overrides["pi-agent-teams.teammate"], undefined);
-	assert.equal(overrides["pi-workbench.teams-scout"].model, "legacy/scout");
-	assert.deepEqual(overrides["pi-workbench.teams-teammate"], { model: "legacy/teammate", thinking: "high" });
-	// A user's renamed override still wins over the recommended profile.
-	const withProfile = buildMigratedSettings(value, { "pi-workbench.teams-scout": { model: "recommended/scout" } });
-	assert.equal(withProfile.subagents.agentOverrides["pi-workbench.teams-scout"].model, "legacy/scout");
+	assert.equal(overrides["pi-workbench.deep-reader"], undefined);
+	assert.equal(overrides["pi-workbench.teams-scout"], undefined);
+	assert.equal(overrides["pi-shipyard.falsifier"], undefined);
+	assert.equal(overrides["pi-shipyard.shipwright"], undefined);
+	assert.equal(overrides["pi-workbench.worker"].model, "recommended/worker");
+	assert.equal(overrides.scout.model, "existing/model");
 });
 
 test("applies with backups, archives the legacy scout, and rolls back safely", () => {

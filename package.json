@@ -1,7 +1,7 @@
 {
   "name": "@danish/pi-workbench",
   "version": "0.2.0",
-  "description": "A unified, modular Pi orchestration system for one-off delegation, Shipyard workflows, agent teams, and bounded dynamic workflows.",
+  "description": "A lean, bounded Pi harness for inspecting, planning, implementing, reviewing, delivering, and auditing software changes.",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,7 +10,6 @@
   "files": [
     "agents/",
     "chains/",
-    "examples/",
     "extensions/",
     "profiles/",
     "skills/",
@@ -24,21 +23,18 @@
     "pi-package",
     "pi",
     "subagents",
-    "orchestration",
-    "shipyard",
-    "agent-teams",
-    "dynamic-workflows"
+    "software-engineering",
+    "bounded-agents",
+    "orchestration"
   ],
   "scripts": {
     "validate": "node --experimental-strip-types scripts/validate.ts",
     "verify:runtime": "node scripts/verify-runtime.mjs",
     "test:core": "node --experimental-strip-types --test test/core/*.test.ts",
-    "test:shipyard": "node --experimental-strip-types --test test/shipyard/*.test.ts",
-    "test:teams": "node --experimental-strip-types --test test/teams/*.test.ts",
-    "test:dynamic": "node --experimental-strip-types --test test/dynamic/*.test.ts",
+    "test:workflows": "node --experimental-strip-types --test test/workflows/*.test.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run validate && npm run verify:runtime && npm run typecheck",
-    "test": "npm run check && npm run test:core && npm run test:shipyard && npm run test:teams && npm run test:dynamic"
+    "test": "npm run check && npm run test:core && npm run test:workflows"
   },
   "pi": {
     "extensions": [
@@ -57,7 +53,6 @@
     }
   },
   "dependencies": {
-    "acorn": "8.17.0",
     "pi-subagents": "https://codeload.github.com/nicobailon/pi-subagents/tar.gz/105c1399d36517292cc7dbe1f56f4724de39bd10"
   },
   "devDependencies": {

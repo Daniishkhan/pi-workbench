@@ -11,19 +11,11 @@ Pi Workbench keeps its orchestration code and externally maintained runtime code
 - Dependency source: the immutable GitHub codeload archive for that commit
 - Locking: `package-lock.json` records the archive URL and SHA-512 integrity
 
-The snapshot is used without source modifications. Workbench imports only the package's public default extension entry point at runtime. Workbench integration uses pi-subagents' public versioned RPC and delegation event contracts; it does not deep-import upstream implementation modules.
+The snapshot is used without source modifications. Workbench imports only the package's public default extension entry point at runtime. Workbench integration uses pi-subagents' public versioned RPC contract; it does not deep-import upstream implementation modules.
 
 To update it, select and review a new upstream commit, update both `package.json` and `scripts/verify-runtime.mjs`, run `npm install`, then run the full Workbench test and Pi discovery suite. Never point a released Workbench version at a floating branch.
 
 `pi-subagents` brings its own declared runtime dependencies (`jiti`, `yaml`, and `typebox`), recorded in the lockfile.
-
-## Acorn
-
-- Upstream: <https://github.com/acornjs/acorn>
-- Version: `8.17.0`
-- License: MIT
-
-Acorn parses the restricted Dynamic Workflows DSL. Workbench validates the resulting syntax tree and never evaluates arbitrary JavaScript.
 
 ## Pi host APIs
 

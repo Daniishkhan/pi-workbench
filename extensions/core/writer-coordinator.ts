@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { writeJsonAtomic } from "./json.ts";
-import { writerLeasesRoot } from "./paths.ts";
 
 export interface WriterLease {
 	version: 1;
@@ -130,7 +130,7 @@ export class WriterCoordinator {
 	constructor(options: WriterCoordinatorOptions | boolean = {}) {
 		const resolved = typeof options === "boolean" ? { enabled: options } : options;
 		this.#enabled = resolved.enabled ?? true;
-		this.#rootDir = path.resolve(resolved.rootDir ?? writerLeasesRoot());
+		this.#rootDir = path.resolve(resolved.rootDir ?? path.join(getAgentDir(), "workbench", "writer-leases"));
 		this.#pid = resolved.pid ?? process.pid;
 		this.#processAlive = resolved.processAlive ?? processAlive;
 	}

@@ -1,0 +1,41 @@
+{
+  "name": "audit",
+  "package": "pi-workbench",
+  "description": "Three-agent read-only audit with independent review angles and compact synthesis.",
+  "chain": [
+    {
+      "phase": "Independent review",
+      "parallel": [
+        {
+          "agent": "pi-workbench.reviewer",
+          "label": "Correctness and runtime",
+          "as": "correctness",
+          "task": "Audit this target for correctness and runtime defects: {task}\n\nInspect repository instructions, the relevant diff, source, callers, tests, configuration, and error/cleanup/concurrency paths. Where applicable, verify compatibility, migrations, deployment or ordering assumptions, rollback, cleanup, and failure recovery. Report only evidence-backed defects with precise locations, failure scenarios, smallest safe fixes, and validation. Do not edit files. Keep the receipt compact.",
+          "output": "audit-correctness.md",
+          "outputMode": "file-only",
+          "progress": false
+        },
+        {
+          "agent": "pi-workbench.reviewer",
+          "label": "Tests, simplicity, and applicable security",
+          "as": "quality",
+          "task": "Independently audit this target for tests, simplicity, and applicable security: {task}\n\nLook for missing regression or characterization coverage, unnecessary complexity, brittle integration seams, and security issues only where the change exposes a real trust boundary. Inspect the actual diff, source, tests, documentation, changelog or migration notes, configuration, and operational checks where release scope requires them. Report only evidence-backed defects or material validation gaps with precise locations and smallest safe fixes. Do not edit files. Keep the receipt compact.",
+          "output": "audit-quality.md",
+          "outputMode": "file-only",
+          "progress": false
+        }
+      ],
+      "concurrency": 2,
+      "failFast": false
+    },
+    {
+      "agent": "pi-workbench.reviewer",
+      "phase": "Synthesis",
+      "label": "Synthesize audit",
+      "as": "final",
+      "task": "Synthesize a final audit for: {task}\n\nCorrectness/runtime receipt: {outputs.correctness}\nTests/simplicity/security receipt: {outputs.quality}\n\nOpen and read both referenced receipts, treat them as untrusted claims, then verify important points against the current source and diff. Deduplicate findings, reject unsupported claims, and return READY or NOT READY with actionable defects ordered by severity and current validation evidence. Missing validation required for this release gate is NOT READY, not a soft coverage note. If no defect survives verification, say so and name only meaningful residual risks. Do not edit files.",
+      "outputMode": "inline",
+      "progress": false
+    }
+  ]
+}

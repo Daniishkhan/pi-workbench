@@ -1,13 +1,4 @@
 {
-  "modules": {
-    "shipyard": true,
-    "agentTeams": true,
-    "dynamicWorkflows": false
-  },
-  "shipyard": {
-    "agentBindings": {}
-  },
-  "dynamic": {},
   "writerGuard": {
     "enabled": true
   }

@@ -43,7 +43,7 @@ function reply(overrides: Partial<SubagentRpcReply> = {}): SubagentRpcReply {
 
 const ctx = { cwd: "/repo" };
 
-test("read-only spawns skip the lease entirely and pass the signal through", async () => {
+test("read-only spawns skip the lease and do not wire caller abort into the emitted RPC", async () => {
 	const rpc = new FakeRpc(() => reply({ data: { text: "launched", details: { runId: "run-1" } } }));
 	const coordinator = new FakeCoordinator();
 	const guard = await beginGuardedSpawn({
@@ -55,9 +55,57 @@ test("read-only spawns skip the lease entirely and pass the signal through", asy
 	assert.equal(spawnReply.success, true);
 	assert.equal(guard.lease, undefined);
 	assert.deepEqual(coordinator.acquired, []);
-	assert.equal(rpc.calls[1]?.signal, controller.signal);
+	assert.equal(rpc.calls[1]?.signal, undefined);
 	guard.discard();
 	assert.deepEqual(coordinator.released, []);
+});
+
+test("an abort after emission waits for acknowledgement and stops the returned run", async () => {
+	const calls: Array<{ method: string; params: Record<string, unknown>; signal?: AbortSignal }> = [];
+	let acknowledgeSpawn: ((value: SubagentRpcReply) => void) | undefined;
+	const rpc = {
+		async request(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<SubagentRpcReply> {
+			calls.push({ method, params, signal });
+			if (method === "ping") return reply();
+			if (method === "stop") return reply({ data: { text: "stop requested" } });
+			return new Promise((resolve) => { acknowledgeSpawn = resolve; });
+		},
+	};
+	const coordinator = new FakeCoordinator();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "writer", writeCapable: true, label: "Test",
+	});
+	const controller = new AbortController();
+	const pending = guard.spawn({ params: { agent: "a" }, signal: controller.signal });
+	await Promise.resolve();
+	assert.deepEqual(calls.map((call) => call.method), ["ping", "spawn"]);
+	assert.equal(calls[1]?.signal, undefined);
+	const rejection = assert.rejects(pending, /cancelled after spawn acknowledgement; stop requested for run-aborted/);
+	controller.abort();
+	assert.deepEqual(calls.map((call) => call.method), ["ping", "spawn"], "stop waits for the spawn acknowledgement");
+	acknowledgeSpawn?.(reply({ data: { details: { runId: "run-aborted" } } }));
+	await rejection;
+	assert.deepEqual(calls.map((call) => call.method), ["ping", "spawn", "stop"]);
+	assert.deepEqual(calls[2]?.params, { id: "run-aborted" });
+	assert.equal(calls[2]?.signal, undefined);
+	assert.deepEqual(coordinator.attached, [{ token: "token-1", runId: "run-aborted" }]);
+	assert.deepEqual(coordinator.released, []);
+});
+
+test("an abort before emission releases the held lease and never spawns", async () => {
+	const rpc = new FakeRpc(() => reply());
+	const coordinator = new FakeCoordinator();
+	const controller = new AbortController();
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "writer", writeCapable: true, label: "Test", signal: controller.signal,
+	});
+	controller.abort();
+	await assert.rejects(
+		() => guard.spawn({ params: { agent: "a" } }),
+		/cancelled before spawn request/,
+	);
+	assert.deepEqual(rpc.calls.map((call) => call.method), ["ping"]);
+	assert.deepEqual(coordinator.released, ["token-1"]);
 });
 
 test("writer spawn attaches the lease to the returned run id", async () => {
@@ -114,8 +162,8 @@ test("ping RPC-level failure releases the lease with a labeled error", async () 
 	const rpc = new FakeRpc((method) => method === "ping" ? reply({ success: false, error: { message: "no session" } }) : reply());
 	const coordinator = new FakeCoordinator();
 	await assert.rejects(
-		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Shipyard workflow launch" }),
-		/Shipyard workflow launch: pi-subagents RPC unavailable: no session/,
+		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Workbench workflow launch" }),
+		/Workbench workflow launch: pi-subagents RPC unavailable: no session/,
 	);
 	assert.deepEqual(coordinator.released, ["token-1"]);
 });

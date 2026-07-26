@@ -2,33 +2,28 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_WORKBENCH_CONFIG, resolveWorkbenchConfig } from "../../extensions/core/config.ts";
 
-test("defaults to Shipyard and Teams enabled with Dynamic Workflows disabled", () => {
-	const config = resolveWorkbenchConfig({});
-	assert.deepEqual(config, DEFAULT_WORKBENCH_CONFIG);
-	assert.equal(config.modules.dynamicWorkflows, false);
-	assert.equal(config.writerGuard.enabled, true);
+test("defaults to the enabled writer guard", () => {
+	assert.deepEqual(resolveWorkbenchConfig({}), DEFAULT_WORKBENCH_CONFIG);
+	assert.deepEqual(resolveWorkbenchConfig({ writerGuard: {} }), DEFAULT_WORKBENCH_CONFIG);
 });
 
-test("accepts explicit module flags, dynamic policy, and sanitized role bindings", () => {
-	const config = resolveWorkbenchConfig({
-		modules: { shipyard: false, agentTeams: false, dynamicWorkflows: true },
-		shipyard: { agentBindings: { "pi-shipyard.codebase-reader": "custom.reader", bad: 42, empty: " " } },
-		dynamic: { defaultSize: "medium", maxConcurrency: 2 },
+test("accepts an explicit writer guard setting", () => {
+	assert.deepEqual(resolveWorkbenchConfig({ writerGuard: { enabled: false } }), {
 		writerGuard: { enabled: false },
 	});
-	assert.deepEqual(config.modules, { shipyard: false, agentTeams: false, dynamicWorkflows: true });
-	assert.deepEqual(config.shipyard.agentBindings, { "pi-shipyard.codebase-reader": "custom.reader" });
-	assert.deepEqual(config.dynamic, { defaultSize: "medium", maxConcurrency: 2 });
-	assert.equal(config.writerGuard.enabled, false);
 });
 
-test("a non-object dynamic section fails back to the empty default", () => {
-	const config = resolveWorkbenchConfig({ dynamic: ["not", "an", "object"] });
-	assert.deepEqual(config.dynamic, {});
+test("rejects non-object config shapes", () => {
+	for (const value of [null, [], "bad", 42]) {
+		assert.throws(() => resolveWorkbenchConfig(value), /Pi Workbench config must be an object/);
+	}
+	for (const value of [null, [], "bad", 42]) {
+		assert.throws(() => resolveWorkbenchConfig({ writerGuard: value }), /writerGuard must be an object/);
+	}
 });
 
-test("malformed values fail back to conservative defaults", () => {
-	const config = resolveWorkbenchConfig({ modules: "bad", writerGuard: { enabled: "yes" } });
-	assert.equal(config.modules.dynamicWorkflows, false);
-	assert.equal(config.writerGuard.enabled, true);
+test("rejects unknown and incorrectly typed settings", () => {
+	assert.throws(() => resolveWorkbenchConfig({ modules: {} }), /unknown key: modules/);
+	assert.throws(() => resolveWorkbenchConfig({ writerGuard: { enabled: "yes" } }), /must be a boolean/);
+	assert.throws(() => resolveWorkbenchConfig({ writerGuard: { enabled: true, mode: "legacy" } }), /unknown key: mode/);
 });

@@ -15,19 +15,20 @@ const OLD_SOURCES = new Set([
 const WORKBENCH_SOURCE = "./packages/pi-workbench";
 const LEGACY_RUNTIME = "npm:pi-subagents@0.35.1";
 const EMBEDDED_RUNTIME_COMMIT = "105c1399d36517292cc7dbe1f56f4724de39bd10";
-/** Legacy agent runtime names rewritten to their unified Workbench namespace
- * when they appear in settings.subagents.agentOverrides. */
-const LEGACY_AGENT_OVERRIDES = {
-	"pi-agent-teams.scout": "pi-workbench.teams-scout",
-	"pi-agent-teams.teammate": "pi-workbench.teams-teammate",
-};
+const REMOVED_AGENT_OVERRIDES = new Set([
+	"pi-agent-teams.scout",
+	"pi-agent-teams.teammate",
+	"pi-workbench.deep-reader",
+	"pi-workbench.oracle",
+	"pi-workbench.researcher",
+	"pi-workbench.teams-scout",
+	"pi-workbench.teams-teammate",
+]);
 
-function rewriteAgentOverrideKeys(overrides) {
-	const rewritten = {};
-	for (const [key, value] of Object.entries(overrides)) {
-		rewritten[LEGACY_AGENT_OVERRIDES[key] ?? key] = value;
-	}
-	return rewritten;
+function removeObsoleteAgentOverrides(overrides) {
+	return Object.fromEntries(Object.entries(overrides).filter(([key]) => (
+		!REMOVED_AGENT_OVERRIDES.has(key) && !key.startsWith("pi-shipyard.")
+	)));
 }
 
 export function sha256(value) {
@@ -107,8 +108,8 @@ export function buildMigratedSettings(settings, profileOverrides = loadProfile()
 		subagents: {
 			...existingSubagents,
 			agentOverrides: {
-				...profileOverrides,
-				...rewriteAgentOverrideKeys(existingOverrides),
+				...removeObsoleteAgentOverrides(profileOverrides),
+				...removeObsoleteAgentOverrides(existingOverrides),
 			},
 		},
 	};

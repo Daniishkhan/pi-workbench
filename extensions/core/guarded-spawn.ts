@@ -2,14 +2,16 @@
  * Guarded subagent spawn: the one place that choreographs a writer lease
  * around a pi-subagents RPC launch.
  *
- * Lease lifecycle (identical for one-off roles, Shipyard workflows, and
- * write-capable teammates):
+ * Lease lifecycle (identical for one-off roles and Workbench workflows):
  *   1. acquire the lease (writers only), then verify RPC readiness (ping);
  *      any ping failure releases the lease. Acquire is self-healing: a
  *      blocking lease whose run is terminal per RPC status is reaped and the
  *      acquire retried once;
- *   2. issue the spawn request — a transport failure keeps the lease but
- *      marks it uncertain, because the launch may have been accepted;
+ *   2. issue the spawn request without wiring caller cancellation into the
+ *      acknowledgement wait — an emitted launch must not be orphaned;
+ *      cancellation after emission waits for the run id and requests stop;
+ *      a transport failure keeps the lease but marks it uncertain, because
+ *      the launch may have been accepted;
  *   3. an RPC-level rejection releases the lease;
  *   4. on success the lease is attached to the returned run id (or marked
  *      uncertain when no run id came back) and ownership moves to the run.
@@ -26,7 +28,7 @@ export interface BeginGuardedSpawnOptions {
 	/** Lease owner label, e.g. "workbench:implement:pi-workbench.worker". */
 	owner: string;
 	writeCapable: boolean;
-	/** Error prefix, e.g. "Workbench launch", "Shipyard workflow launch", "Spawn". */
+	/** Error prefix, e.g. "Workbench launch" or "Workbench workflow launch". */
 	label: string;
 	signal?: AbortSignal;
 }
@@ -113,16 +115,31 @@ export async function beginGuardedSpawn(options: BeginGuardedSpawnOptions): Prom
 		lease,
 		discard: release,
 		async spawn(call: GuardedSpawnCall): Promise<GuardedSpawnResult> {
-			const reply = await options.rpc.request("spawn", call.params, call.signal).catch(async (error: unknown) => {
-				// The launch may have been accepted before the reply was lost:
-				// keep the lease, flag it, journal, then rethrow the original error.
-				if (state === "held") {
-					state = "transferred";
-					coordinator?.markUncertain(lease?.token);
-				}
-				await call.onTransportError?.(error);
-				throw error;
-			});
+			const signal = call.signal ?? options.signal;
+			if (signal?.aborted) {
+				release();
+				throw new Error(`${options.label} cancelled before spawn request.`);
+			}
+			let abortedDuringSpawn = false;
+			const onAbort = () => { abortedDuringSpawn = true; };
+			signal?.addEventListener("abort", onAbort, { once: true });
+			let reply: SubagentRpcReply;
+			try {
+				// Deliberately omit the signal. Once the request is emitted we need its
+				// acknowledgement (and run id) to cancel the launched process safely.
+				reply = await options.rpc.request("spawn", call.params).catch(async (error: unknown) => {
+					// The launch may have been accepted before the reply was lost:
+					// keep the lease, flag it, journal, then rethrow the original error.
+					if (state === "held") {
+						state = "transferred";
+						coordinator?.markUncertain(lease?.token);
+					}
+					await call.onTransportError?.(error);
+					throw error;
+				});
+			} finally {
+				signal?.removeEventListener("abort", onAbort);
+			}
 			if (!reply.success) {
 				await call.onRejected?.(reply);
 				release();
@@ -133,6 +150,16 @@ export async function beginGuardedSpawn(options: BeginGuardedSpawnOptions): Prom
 				state = "transferred";
 				if (runId) coordinator?.attachRun(lease?.token, runId);
 				else coordinator?.markUncertain(lease?.token);
+			}
+			if (abortedDuringSpawn || signal?.aborted) {
+				let stopRequested = false;
+				if (runId) {
+					stopRequested = await options.rpc.request("stop", { id: runId })
+						.then((stop) => stop.success, () => false);
+				}
+				throw new Error(runId
+					? `${options.label} cancelled after spawn acknowledgement; ${stopRequested ? "stop requested" : "stop could not be confirmed"} for ${runId}.`
+					: `${options.label} cancelled after spawn acknowledgement; inspect active subagents because no run id was returned.`);
 			}
 			if (!runId && call.requireRunIdMessage) throw new Error(call.requireRunIdMessage);
 			return { reply, runId };

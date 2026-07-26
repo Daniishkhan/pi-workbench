@@ -1,281 +1,161 @@
 # Pi Workbench
 
-Pi Workbench is a private, modular Pi package for a solo software-development workflow. It combines reusable one-off agents, Shipyard's fixed engineering pipelines, Agent Teams, and bounded Dynamic Workflows behind one policy layer.
+Pi Workbench is a small, bounded software-engineering harness for Pi. It gives one accountable parent agent four focused roles, two fixed workflows, and one adaptive engineering playbook while relying on the immutable upstream `pi-subagents` package for process and session execution.
 
-Workbench is the single top-level Pi package. It owns Shipyard, Agent Teams, Dynamic Workflows, roles, routing, shared policy, and writer safety. The process/session engine remains upstream `pi-subagents`, but Workbench now declares, integrity-locks, and registers an immutable snapshot of that dependency itself—there is no second Pi package entry and no vendored fork.
+The design deliberately has one orchestration layer. There are no agent teams, programmable workflow graphs, recursive delegations, or alternate policy skills. The playbook changes the method—not the topology—so a documentation edit, a causal bug investigation, and a release audit do not receive the same ceremony.
 
-## Architecture
+## Execution model
 
 ```text
-/workbench and workbench_route
-  ├─ one-off roles: quick, deep, plan, implement, review-oneoff
-  ├─ Shipyard: explore, debug, fast, review, security, ui, compact, deliver, ship
-  ├─ Agent Teams: peer communication and shared tasks
-  └─ Dynamic Workflows: bounded branches/loops/fanout (experimental)
+/workbench or workbench_route
+  ├─ inspect   → one read-only scout
+  ├─ plan      → one read-only planner
+  ├─ implement → one leased writer
+  ├─ review    → one fresh read-only reviewer
+  ├─ deliver   → fixed plan/write/review workflow
+  └─ audit     → fixed read-only audit workflow
                        │
-     pi-subagents upstream main @ 105c1399d365
+             pinned pi-subagents runtime
 ```
 
-The four modes are alternatives. Workbench forbids nested orchestration and keeps one mutation-capable owner per cwd/worktree for Workbench-managed launches.
+The parent owns task framing, routing, and final synthesis. Children complete one bounded assignment and cannot launch more orchestration. Workbench permits only one managed writer per Git worktree; read-only work remains independent.
 
 ## Requirements
 
 - Pi 0.81.1 or newer
 - Node.js 24 or newer
-- Network access during installation to fetch the integrity-locked upstream `pi-subagents` snapshot
-- `pi-web-access` only when using `pi-workbench.researcher`
+- Network access during installation to fetch the integrity-locked `pi-subagents` snapshot
 
-## Ownership boundary
+The upstream source and lock are documented in [THIRD_PARTY.md](./THIRD_PARTY.md). Workbench registers that runtime before its own RPC client, but exposes only the `pi-workbench` policy skill.
 
-Shipyard, Agent Teams, and Dynamic Workflows are self-contained Workbench modules. `pi-subagents` is not Workbench-owned: it is pulled directly from upstream main commit `105c1399d36517292cc7dbe1f56f4724de39bd10`, locked by URL and SHA-512 integrity, and imported only through its public package entry point. See [`THIRD_PARTY.md`](./THIRD_PARTY.md).
-
-Updating the runtime is an explicit Workbench change: review a new upstream commit, update the dependency and compatibility verifier, regenerate the lockfile, then run the complete test and Pi discovery suite. Workbench never floats silently with the main branch.
+The upstream runtime's unrestricted `subagent` model tool is replaced with a small rejection boundary. Its RPC bridge remains internal, so model-initiated launches must pass through `workbench_route` and its fixed limits. Upstream slash commands remain an explicit human-operated escape hatch; they are outside the bounded model-routing contract.
 
 ## Install from this checkout
 
-The canonical Git checkout is:
-
-```text
-~/Desktop/pi-workbench
-```
-
-Pi activates it through this local package link, preserving the existing settings entry:
-
-```text
-~/.pi/agent/packages/pi-workbench -> ~/Desktop/pi-workbench
-```
-
-Install the locked dependencies and verify the runtime from the checkout:
-
 ```bash
-cd ~/Desktop/pi-workbench
+cd /path/to/pi-workbench
 npm ci
 npm run verify:runtime
 ```
 
-For a first-time migration from the former standalone packages, use the migration script instead of editing settings by hand:
-
-```bash
-node scripts/migrate-settings.mjs --check
-node scripts/migrate-settings.mjs --apply
-```
-
-The migration:
-
-- removes the old standalone `npm:pi-subagents@0.35.1` entry because Workbench now owns the upstream runtime dependency;
-- replaces the old local Shipyard/Teams/Dynamic package entries with `./packages/pi-workbench`;
-- merges the recommended namespaced model profile without overwriting existing user overrides;
-- creates a timestamped settings backup and manifest;
-- archives `~/.agents/scout.md` instead of deleting it;
-- leaves old package directories and all prior run/state data untouched.
-
-Run `/reload` after applying. The apply result prints the rollback manifest:
-
-```bash
-node scripts/migrate-settings.mjs --rollback ~/.pi/agent/backups/pi-workbench-.../manifest.json
-```
-
-Rollback refuses to overwrite settings edited after migration unless `--force` is supplied. The completed local migration's historical backup directories were later removed on explicit owner instruction; this script still creates a new reversible manifest if it is run again.
+Link the checkout from Pi's package directory, then run `/reload`. The repository also contains `scripts/migrate-settings.mjs` for an existing local installation; run it with `--check` before `--apply`.
 
 ## Front door
 
-Humans use `/workbench` or `/work`:
+Humans use `/workbench` or its `/work` alias:
 
 ```text
 /workbench status
-/workbench quick <question>
-/workbench deep <task>
-/workbench plan <task>
+/workbench inspect <question or target>
+/workbench plan <approved problem>
 /workbench implement <approved task>
-/workbench review-oneoff <target>
-/workbench review <target>
-/workbench deliver <approved task>
-/workbench team <goal>
-/workbench dynamic <task>
+/workbench review <change or target>
+/workbench deliver <approved end-to-end task>
+/workbench audit <release-critical target>
 ```
 
-Use `/workbench plan grill: <target>` when the planner should pressure-test the proposal through a bounded, one-question-at-a-time supervisor interview before returning the hardened plan. Ordinary `plan` requests remain non-interactive.
+Models call `workbench_route` with the same seven modes. Selection is explicit; there is no keyword router.
 
-Models use `workbench_route` with the same explicit modes. There is no keyword-based auto-router: routing is deterministic and visible.
+| Mode | Execution | Capability | Hard runtime | Turn budget |
+|---|---|---:|---:|---:|
+| `status` | Parent-only harness and writer-lease status | Read-only | None | None |
+| `inspect` | `pi-workbench.fast-scout` | Read-only | 5 minutes | 8 + 2 grace |
+| `plan` | `pi-workbench.planner` | Read-only | 15 minutes | 18 + 2 grace |
+| `implement` | `pi-workbench.worker` | Writer | 45 minutes | Runtime bound only |
+| `review` | `pi-workbench.reviewer` | Read-only | 15 minutes | 18 + 2 grace |
+| `deliver` | Fixed delivery chain | One writer | 45 minutes | Runtime bound only |
+| `audit` | Fixed audit chain | Read-only | 20 minutes | Runtime bound only |
 
-Workbench registers no module-specific orchestration commands. Legacy `/shipyard`, `/team`, `/workflow`, `/workflows`, `/ultracode`, and saved-workflow slash commands are not exposed. Supporting `team_*` and `dynamic_*` tools are operational primitives used only after `workbench_route` selects those modes; Shipyard launches directly through the router's internal service.
+The writing routes intentionally use a hard runtime without a turn cutoff so a mutation is not interrupted merely because it crossed a conversational turn count. Every launch is still time-bounded.
 
-## Selection policy
+## Adaptive playbooks
 
-- **quick**: bounded, low-cost repository reconnaissance;
-- **deep**: comprehensive implementation context and reusable handoff;
-- **plan / implement / review-oneoff**: one independent result;
-- **Shipyard**: fixed code exploration, debugging, review, delivery, and readiness gates;
-- **Agent Teams**: only when peers need shared tasks or direct messages;
-- **Dynamic Workflows**: only for bounded data-dependent fanout, branches, or loops.
+The single `pi-workbench` skill selects the lightest safe route or short route sequence:
 
-Prefer the smallest reliable mechanism. Shipyard is safer than inventing a delivery topology; Teams are more expensive than report-back delegation; Dynamic Workflows are not a replacement for Shipyard.
+- A repository question or diagnosis without mutation uses `inspect`.
+- A clear, local, approved patch uses `implement`; add `review` when behavior or regression risk warrants independent evidence.
+- An unclear failure uses `inspect` to trace expected versus observed behavior to the first bad state, followed by one bounded implementation when the cause is supported.
+- A material design, interface, migration, or product decision uses `plan` before mutation.
+- A bounded feature, cross-cutting fix, or risky refactor that benefits from plan, one writer, and fresh review uses `deliver`.
+- Release-critical compatibility, migration, security, or operational readiness uses the read-only `audit` route. Findings are fixed later through `implement` or `deliver`.
+
+The method is evidence-scaled. Stable behavior changes and bugs prefer a focused regression or contract test that demonstrably fails before the fix. Risky behavior-preserving refactors use characterization coverage. Prose, generated output, and mechanical configuration use their strongest relevant validators instead of synthetic tests. Every completion claim requires fresh validation after the last mutation and inspection of the current diff.
+
+Workbench does not automatically execute an open-ended plan task by task or start review/fix retry loops. Each writing route owns one coherent approved scope and returns within its hard runtime. For substantial work, the parent can obtain plan approval and route a bounded implementation slice explicitly.
+
+Use the smallest mode that can finish the work:
+
+- `inspect` answers a bounded repository question and locates the governing code.
+- `plan` turns verified repository evidence into an implementation-ready plan.
+- `implement` performs one already-approved change with focused validation.
+- `review` independently inspects a change and reports only evidence-backed findings.
+- `deliver` is the normal end-to-end path when planning, one implementation owner, and fresh review all add value.
+- `audit` is the explicit release-critical read-only path. It is not a routine precondition for implementation.
+
+`deliver` and `audit` are static package chains, not user-programmable graphs. They do not branch into teams, retry meshes, or nested workflows.
+
+## Roles and models
+
+The package contains exactly four model-agnostic leaf roles. Their prompts share the adaptive evidence discipline while retaining distinct capabilities:
+
+- `pi-workbench.fast-scout`
+- `pi-workbench.planner`
+- `pi-workbench.worker`
+- `pi-workbench.reviewer`
+
+Recommended model, fallback, and thinking assignments live in `profiles/recommended-agent-overrides.json`. Change those settings without editing role prompts.
 
 ## Configuration
 
-Global configuration lives at:
+Configuration lives at:
 
 ```text
 ~/.pi/agent/extensions/pi-workbench/config.json
 ```
 
-Defaults:
+The complete schema is:
 
 ```json
 {
-  "modules": {
-    "shipyard": true,
-    "agentTeams": true,
-    "dynamicWorkflows": false
-  },
-  "shipyard": {
-    "agentBindings": {}
-  },
-  "dynamic": {},
   "writerGuard": {
     "enabled": true
   }
 }
 ```
 
-Changes take effect after `/reload`.
-
-The optional `dynamic` object carries Dynamic Workflows policy (`defaultSize`, `sizeLimits`, `maxConcurrency`, `maxRuntimeMs`, `maxIntermediateBytes`, `maxResultBytes`, `allowUnrestricted`, `unrestrictedSafetyCap`, `allowUnattendedTrusted`, `approvalMode`). The legacy standalone `~/.pi/agent/extensions/dynamic-workflows/config.json` is still read as a fallback with a deprecation warning when the `dynamic` section is empty.
-
-### Shipyard role binding
-
-Shipyard chains retain their canonical `pi-shipyard.*` role names. You can substitute custom agents without weakening capability policy:
-
-```json
-{
-  "shipyard": {
-    "agentBindings": {
-      "pi-shipyard.codebase-reader": "pi-workbench.deep-reader",
-      "pi-shipyard.contract-reviewer": "pi-workbench.reviewer"
-    }
-  }
-}
-```
-
-Capability grants are calculated against the canonical Shipyard role before the replacement name is applied. A binding that changes a role from read-only to writer (or the reverse) is rejected. Unknown custom agents fail closed as writers, so custom read-only roles must first be added to the shared role policy registry.
-
-### Models
-
-Agent files are model-agnostic. Recommended local assignments are stored in:
-
-```text
-profiles/recommended-agent-overrides.json
-```
-
-The migration merges these into `settings.subagents.agentOverrides`. This keeps role behavior in agent files and model/fallback/thinking policy in settings where it can be changed without editing package source.
-
-## Agents
-
-General package-scoped roles:
-
-- `pi-workbench.fast-scout`
-- `pi-workbench.deep-reader`
-- `pi-workbench.planner`
-- `pi-workbench.worker`
-- `pi-workbench.reviewer`
-- `pi-workbench.oracle`
-- `pi-workbench.researcher`
-
-Compatibility namespaces remain unchanged:
-
-- `pi-shipyard.*`
-- `pi-workbench.teams-scout`
-- `pi-workbench.teams-teammate`
-
-(Agent Teams roles moved from the retired `pi-agent-teams.*` namespace; the settings migration rewrites those `agentOverrides` keys automatically.)
-
-No package agent registers as bare `scout`, so it cannot unexpectedly shadow the clean builtin.
-
-## Skills
-
-The Pi package manifest exposes only the unified `pi-workbench` routing skill to the parent session. The `agent-teams` and specialized `shipyard-*` skills remain packaged under `skills/` for internal use, but they do not appear in Pi's global startup skill list.
+Unknown keys and invalid value types are rejected. A missing or invalid file falls back to the safe default with the writer guard enabled. Changes take effect after `/reload`.
 
 ## Writer guard
 
-Durable writer leases live under:
+Workbench acquires a durable lease before `implement` or the write phase of `deliver`. The lease key is the canonical Git worktree root, so linked worktrees remain independent. Async completion releases the matching lease; session startup reconciles terminal runs left behind by an interruption.
+
+Leases live under:
 
 ```text
 ~/.pi/agent/workbench/writer-leases/
 ```
 
-Workbench acquires a lease for:
+Inspect them with `/workbench status`. `/workbench release-writer` is an interactive recovery operation, not an execution mode; use it only after confirming the recorded writer is no longer active.
 
-- Shipyard `compact`, `deliver`, and `ship`;
-- the general `implement` route;
-- write-capable team members;
-- dynamic workflows declaring `write` permission.
+The guard applies to Workbench-managed launches, not unrelated extension tools called directly.
 
-Read-only work can still run concurrently. Unknown custom team agents always fail closed as writers; `team_spawn.write: false` cannot downgrade an unregistered tool surface. Writer keys resolve to the canonical Git worktree root, while linked worktrees remain independent. An uncertain launch retains its lease.
+## Repository inspection
 
-Inspect leases with `/workbench`. Manual recovery is available through `/workbench release-writer`, which requires interactive confirmation and should be used only after confirming the old writer is gone.
-
-This guard covers Workbench-managed launches, not arbitrary direct calls to another extension's `subagent` tool.
-
-## Dynamic Workflows
-
-Dynamic Workflows are disabled by default. When enabled they retain exact-source editing, hash-bound approval, budgets, state artifacts, structured outputs, bounded loops, and branching. The reviewed bytes—not an earlier draft—are compiled and executed. Saved definitions remain reusable through the Workbench dynamic route and `dynamic_run`; they do not create slash commands.
-
-Compiler provenance checks reject forged nodes/references, unsafe schema shapes, non-finite values, undeclared skills/acceptance payloads, future or scope-invalid references, and nested phases. Input, individual output, aggregate intermediate values, and the selected final result all have hard limits. Interrupted statuses remain inspectable and are reconciled as failed after reload.
-
-Workbench removes the old unversioned parallel batch bridge. Read-only fanout uses concurrent versioned single-agent delegation through ephemeral, permission-restricted runtime agents. Parallel writers are rejected—even when old source requests `worktree:true`—because the foreground delegation protocol cannot safely create isolated worktrees. Use one serialized writer followed by read-only verification. Cancellation holds the durable writer lease until the child returns a terminal acknowledgement or the bounded shutdown grace expires.
-
-Dynamic state lives under the unified Workbench state root:
-
-```text
-~/.pi/agent/workbench/dynamic/saved/
-~/.pi/agent/workbench/dynamic/drafts/
-~/.pi/agent/workbench/dynamic/runs/
-~/.pi/agent/workbench/dynamic/trust.json
-```
-
-Pre-unification locations (`~/.pi/agent/workflows/`, `workflow-drafts/`, `workflow-runs/`, `workflow-trust.json`) are still read as a fallback; new writes always go to the unified root.
-
-Dynamic policy lives in the `dynamic` section of the Workbench config (see Configuration); the legacy `~/.pi/agent/extensions/dynamic-workflows/config.json` is read as a deprecated fallback only.
-
-## State locations
-
-All Workbench state shares one root:
-
-```text
-~/.pi/agent/workbench/
-  shipyard/runs/       findings ledgers + launch journals
-  shipyard/context/    reusable repository context cache
-  teams/               Agent Teams shared state
-  dynamic/             saved definitions, drafts, run artifacts, trust
-  writer-leases/       one-writer-per-worktree leases
-```
-
-Legacy locations (`~/.pi/agent/shipyard-runs/`, `shipyard-context/`, `teams/`, and the dynamic paths above) remain readable as fallbacks, so existing state keeps working without migration. Writes always go to the unified root. `PI_WORKBENCH_TEAMS_ROOT` overrides the teams root (the retired `PI_AGENT_TEAMS_ROOT` is honored as a fallback).
-
-- pi-subagents async artifacts: owned entirely by `pi-subagents`
-
-No state migration or deletion is required.
+Workbench registers `workbench_repo`, a read-only repository inspection tool shared by its four roles. Mutation remains confined to the worker's normal editing surface. Intermediate chain receipts use upstream `pi-subagents` run storage under `.pi-subagents/chain-runs/<runId>`; Workbench adds no custom run database, findings ledger, context cache, team mailbox, or dynamic workflow store.
 
 ## Validation
 
+Run the full local contract before handoff:
+
 ```bash
-cd ~/Desktop/pi-workbench
 npm test
 npm run verify:runtime
 npm pack --dry-run
 pi -e . --list-models
 ```
 
-After settings migration and `/reload`:
+After `/reload`, confirm `/workbench`, `/work`, and `workbench_route` are present and legacy Shipyard, Teams, or Dynamic Workflow entry points are absent.
 
-```text
-/subagents-doctor
-/workbench
-/work
-```
+## Authority boundary
 
-Confirm that `/shipyard`, `/team`, `/workflow`, `/workflows`, and `/ultracode` are absent. Dynamic enablement should be smoke-tested separately on a disposable repository.
-
-## Shipping boundary
-
-The package never treats implementation or readiness as authority to commit, push, publish, deploy, create a remote, or delete old packages/data. Those remain explicit user actions.
+No mode grants authority to commit, push, publish, deploy, create or alter remotes, change credentials, or perform destructive Git or data operations. Those actions require an explicit user request.

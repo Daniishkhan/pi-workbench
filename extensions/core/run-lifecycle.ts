@@ -1,8 +1,8 @@
 /**
  * Shared understanding of pi-subagents' documented run lifecycle: the
  * `subagent:async-complete` event and the status.json/result.json artifacts
- * written under the pi-subagents temp scope. Both the writer-lease
- * reconciler and the Agent Teams delivery loop classify runs with these.
+ * written under the pi-subagents temp scope. The writer-lease reconciler uses
+ * these helpers to distinguish active children from completed runs.
  */
 
 /** Terminal states in pi-subagents' documented status.json lifecycle. */
