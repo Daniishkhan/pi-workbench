@@ -1,7 +1,7 @@
 /**
  * Shared JSON persistence helpers: atomic temp-file-then-rename writes with
  * private permissions, and tolerant reads with an explicit fallback.
- * All Workbench state files go through here so durability and permission
+ * All Pi Engineering state files go through here so durability and permission
  * rules are defined once.
  */
 

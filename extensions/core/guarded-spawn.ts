@@ -1,8 +1,8 @@
 /**
- * Guarded subagent spawn: the one place that choreographs a writer lease
+ * Guarded specialist spawn: the one place that choreographs a write lock
  * around a pi-subagents RPC launch.
  *
- * Lease lifecycle (identical for one-off roles and Workbench workflows):
+ * Write-lock lifecycle (identical for one-off specialists and engineering workflows):
  *   1. acquire the lease (writers only), then verify RPC readiness (ping);
  *      any ping failure releases the lease. Acquire is self-healing: a
  *      blocking lease whose run is terminal per RPC status is reaped and the
@@ -25,10 +25,10 @@ export interface BeginGuardedSpawnOptions {
 	rpc: Pick<SubagentRpcClient, "request">;
 	writerCoordinator?: WriterCoordinator;
 	cwd: string;
-	/** Lease owner label, e.g. "workbench:implement:pi-workbench.worker". */
+	/** Lease owner label, e.g. "engineering:implement:pi-workbench.worker". */
 	owner: string;
 	writeCapable: boolean;
-	/** Error prefix, e.g. "Workbench launch" or "Workbench workflow launch". */
+	/** Error prefix, e.g. "Engineering assignment" or "Engineering workflow assignment". */
 	label: string;
 	signal?: AbortSignal;
 }
@@ -65,7 +65,7 @@ function rpcErrorDetail(reply: SubagentRpcReply, fallback: string): string {
 	return code ? `${code}: ${message}` : message;
 }
 
-/** Acquire the writer lease with self-healing: when the blocking lease belongs
+/** Acquire the write lock with self-healing: when the blocking lock belongs
  * to a run that pi-subagents reports as terminal, reap the orphaned lease and
  * retry once instead of failing the launch. Active or unverifiable blockers
  * keep the original conflict error. */

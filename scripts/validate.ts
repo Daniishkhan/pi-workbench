@@ -1,11 +1,19 @@
 #!/usr/bin/env node
-/** Validate the lean Pi Workbench package contract. */
+/** Validate the lean Pi Engineering package contract. */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_WORKBENCH_CONFIG, resolveWorkbenchConfig } from "../extensions/core/config.ts";
+import { DEFAULT_ENGINEERING_CONFIG, resolveEngineeringConfig } from "../extensions/core/config.ts";
 import { ROLE_POLICIES } from "../extensions/core/role-policy.ts";
-import { ONE_OFF_AGENTS, ROUTE_LIMITS, WORKBENCH_MODES } from "../extensions/core/routing.ts";
+import {
+	DEFAULT_ENGINEERING_EFFORT,
+	EFFORT_ACTION_LIMITS,
+	ONE_OFF_AGENTS,
+	ACTION_LIMITS,
+	ENGINEERING_EFFORTS,
+	ENGINEERING_ACTIONS,
+} from "../extensions/core/routing.ts";
+import { workflowDefinitionErrors } from "../extensions/core/workflow-validation.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const errors = [];
@@ -74,20 +82,20 @@ const expectedChainFiles = [
 	"chains/workbench/audit.chain.json",
 	"chains/workbench/deliver.chain.json",
 ];
-const expectedModes = ["status", "inspect", "plan", "implement", "review", "deliver", "audit"];
+const expectedActions = ["status", "inspect", "plan", "implement", "review", "deliver", "audit"];
 const pinnedRuntime = "https://codeload.github.com/nicobailon/pi-subagents/tar.gz/105c1399d36517292cc7dbe1f56f4724de39bd10";
 
 // Package and public discovery surface.
 const packageJson = readJson(path.join(root, "package.json"));
 if (packageJson) {
-	if (packageJson.name !== "@danish/pi-workbench") fail("package.json: unexpected package name");
+	if (packageJson.name !== "@danish/pi-engineering") fail("package.json: unexpected package name");
 	if (!packageJson.keywords?.includes("pi-package")) fail("package.json: keywords must include pi-package");
 	if (packageJson.dependencies?.["pi-subagents"] !== pinnedRuntime) {
 		fail("package.json: pi-subagents must remain pinned to the reviewed immutable source");
 	}
 	if (packageJson.bundledDependencies?.includes?.("pi-subagents")) fail("package.json: do not vendor pi-subagents");
 	if (!packageJson.files?.includes?.("THIRD_PARTY.md") || !existsSync(path.join(root, "THIRD_PARTY.md"))) {
-		fail("package.json: third-party provenance must ship with Workbench");
+		fail("package.json: third-party provenance must ship with Pi Engineering");
 	}
 	if (packageJson.files?.includes?.("examples/")) fail("package.json: examples/ is not part of the lean harness");
 	if (Array.isArray(packageJson.pi?.prompts) && packageJson.pi.prompts.length > 0) {
@@ -95,7 +103,7 @@ if (packageJson) {
 	}
 	const expectedManifest = {
 		extensions: ["./extensions/index.ts"],
-		skills: ["./skills/pi-workbench"],
+		skills: ["./skills/pi-engineering"],
 		agents: ["./agents"],
 		chains: ["./chains"],
 	};
@@ -117,20 +125,20 @@ if (packageJson) {
 }
 
 // Minimal strict configuration.
-if (JSON.stringify(resolveWorkbenchConfig({})) !== JSON.stringify(DEFAULT_WORKBENCH_CONFIG)) {
+if (JSON.stringify(resolveEngineeringConfig({})) !== JSON.stringify(DEFAULT_ENGINEERING_CONFIG)) {
 	fail("config: empty input must resolve to the safe default");
 }
-if (JSON.stringify(readJson(path.join(root, "config.example.json"))) !== JSON.stringify(DEFAULT_WORKBENCH_CONFIG)) {
-	fail("config.example.json: must contain only the default writerGuard policy");
+if (JSON.stringify(readJson(path.join(root, "config.example.json"))) !== JSON.stringify(DEFAULT_ENGINEERING_CONFIG)) {
+	fail("config.example.json: must contain only the default writeLock policy");
 }
 for (const invalid of [
 	{ modules: {} },
 	{ shipyard: {} },
 	{ dynamic: {} },
-	{ writerGuard: { enabled: "yes" } },
+	{ writeLock: { enabled: "yes" } },
 ]) {
 	try {
-		resolveWorkbenchConfig(invalid);
+		resolveEngineeringConfig(invalid);
 		fail(`config: invalid input was accepted: ${JSON.stringify(invalid)}`);
 	} catch {
 		// Expected strict rejection.
@@ -154,11 +162,11 @@ for (const file of agentFiles) {
 		if (Object.hasOwn(fm, field)) fail(`${relative(file)}: ${field} does not belong in the lean role prompt`);
 	}
 	const tools = new Set((fm.tools ?? "").split(",").map((value) => value.trim()).filter(Boolean));
-	for (const required of ["read", "grep", "find", "ls", "workbench_repo"]) {
+	for (const required of ["read", "grep", "find", "ls", "inspect_repo"]) {
 		if (!tools.has(required)) fail(`${relative(file)}: missing required tool ${required}`);
 	}
 	for (const tool of tools) {
-		if (/^(?:subagent|team_|dynamic_|shipyard_)/.test(tool) || tool === "workbench_route") {
+		if (/^(?:subagent|team_|dynamic_|shipyard_)/.test(tool) || tool === "assign_engineering") {
 			fail(`${relative(file)}: leaf role exposes orchestration/legacy tool ${tool}`);
 		}
 	}
@@ -176,7 +184,7 @@ for (const [agent, capability] of Object.entries(expectedAgents)) {
 	if (ROLE_POLICIES[agent]?.capability !== capability) fail(`role-policy: ${agent} must be ${capability}`);
 	if (!ROLE_POLICIES[agent]?.surfaces?.length) fail(`role-policy: ${agent} has no allowed surface`);
 }
-if (JSON.stringify(WORKBENCH_MODES) !== JSON.stringify(expectedModes)) fail("routing: public mode list changed");
+if (JSON.stringify(ENGINEERING_ACTIONS) !== JSON.stringify(expectedActions)) fail("routing: public action list changed");
 const expectedOneOffAgents = {
 	inspect: "pi-workbench.fast-scout",
 	plan: "pi-workbench.planner",
@@ -192,14 +200,40 @@ const expectedLimits = {
 	deliver: { timeoutMs: 45 * 60_000 },
 	audit: { timeoutMs: 20 * 60_000 },
 };
-if (JSON.stringify(ROUTE_LIMITS) !== JSON.stringify(expectedLimits)) fail("routing: bounded route limits changed");
+if (JSON.stringify(ACTION_LIMITS) !== JSON.stringify(expectedLimits)) fail("routing: bounded action limits changed");
+const expectedEffortLimits = {
+	quick: {
+		inspect: { timeoutMs: 3 * 60_000, turnBudget: { maxTurns: 5, graceTurns: 1 } },
+		plan: { timeoutMs: 8 * 60_000, turnBudget: { maxTurns: 10, graceTurns: 2 } },
+		implement: { timeoutMs: 20 * 60_000 },
+		review: { timeoutMs: 8 * 60_000, turnBudget: { maxTurns: 10, graceTurns: 2 } },
+		deliver: { timeoutMs: 30 * 60_000 },
+		audit: { timeoutMs: 15 * 60_000 },
+	},
+	standard: expectedLimits,
+	deep: {
+		inspect: { timeoutMs: 2 * 60 * 60_000 },
+		plan: { timeoutMs: 2 * 60 * 60_000 },
+		implement: { timeoutMs: 4 * 60 * 60_000 },
+		review: { timeoutMs: 2 * 60 * 60_000 },
+		deliver: { timeoutMs: 4 * 60 * 60_000 },
+		audit: { timeoutMs: 3 * 60 * 60_000 },
+	},
+};
+if (JSON.stringify(ENGINEERING_EFFORTS) !== JSON.stringify(["quick", "standard", "deep"])) {
+	fail("routing: effort profiles changed");
+}
+if (DEFAULT_ENGINEERING_EFFORT !== "standard") fail("routing: model-facing effort must default to standard");
+if (JSON.stringify(EFFORT_ACTION_LIMITS) !== JSON.stringify(expectedEffortLimits)) {
+	fail("routing: adaptive effort limits changed");
+}
 
 // Exactly one public skill; upstream pi-subagents policy is intentionally not rediscovered.
 const skillFiles = walk(path.join(root, "skills"), (file) => path.basename(file) === "SKILL.md");
-assertExactSet(skillFiles.map(relative), ["skills/pi-workbench/SKILL.md"], "skills");
+assertExactSet(skillFiles.map(relative), ["skills/pi-engineering/SKILL.md"], "skills");
 if (skillFiles.length === 1) {
 	const fm = parseFrontmatter(skillFiles[0]);
-	if (fm.name !== "pi-workbench" || !fm.description) fail("skills/pi-workbench/SKILL.md: invalid frontmatter");
+	if (fm.name !== "pi-engineering" || !fm.description) fail("skills/pi-engineering/SKILL.md: invalid frontmatter");
 }
 
 // Profile must cover exactly the four packaged roles.
@@ -207,77 +241,18 @@ const profile = readJson(path.join(root, "profiles", "recommended-agent-override
 if (profile?.schemaVersion !== 1 || !profile?.agentOverrides) fail("profiles/recommended-agent-overrides.json: invalid profile");
 assertExactSet(Object.keys(profile?.agentOverrides ?? {}), Object.keys(expectedAgents), "profile agents");
 
-// Two small static chains, with no parallel writer and no forward artifact references.
+// Two small static chains. The same closed contract runs again at launch time.
 const chainFiles = walk(path.join(root, "chains"), (file) => file.endsWith(".chain.json"));
 assertExactSet(chainFiles.map(relative), expectedChainFiles, "chains");
-const allowedTaskKeys = new Set(["agent", "task", "phase", "label", "as", "output", "outputMode", "progress"]);
-const allowedGroupKeys = new Set(["phase", "label", "parallel", "concurrency", "failFast"]);
-const outputReferencePattern = /\{outputs\.([A-Za-z_][A-Za-z0-9_]*)\}/g;
-
-function inspectTask(label, stepNumber, task, available, produced, outputPaths) {
-	const prefix = `${label} step ${stepNumber}`;
-	for (const key of Object.keys(task)) if (!allowedTaskKeys.has(key)) fail(`${prefix}: unsupported task key ${key}`);
-	if (!agentNames.has(task.agent)) fail(`${prefix}: unknown agent ${task.agent}`);
-	if (!ROLE_POLICIES[task.agent]?.surfaces.includes("workflow")) fail(`${prefix}: agent ${task.agent} is not approved for workflows`);
-	if (typeof task.task !== "string" || !task.task.trim()) fail(`${prefix}: task must be non-empty`);
-	const references = [...(task.task?.matchAll(outputReferencePattern) ?? [])].map((match) => match[1]);
-	for (const reference of references) if (!available.has(reference)) fail(`${prefix}: forward or unknown output reference ${reference}`);
-	if (references.length > 0 && !task.task.includes("Open and read")) fail(`${prefix}: artifact consumer must explicitly open referenced outputs`);
-	if (task.as) {
-		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(task.as)) fail(`${prefix}: invalid as name ${task.as}`);
-		if (available.has(task.as) || produced.has(task.as)) fail(`${prefix}: duplicate as name ${task.as}`);
-		produced.add(task.as);
-	}
-	if (task.outputMode === "file-only" && typeof task.output !== "string") fail(`${prefix}: file-only requires output`);
-	if (typeof task.output === "string") {
-		if (path.isAbsolute(task.output)) fail(`${prefix}: output must be relative`);
-		if (outputPaths.has(task.output)) fail(`${prefix}: duplicate output path ${task.output}`);
-		outputPaths.add(task.output);
-	}
-}
-
 for (const file of chainFiles) {
 	const chain = readJson(file);
 	const label = relative(file);
 	const expectedName = path.basename(file, ".chain.json");
-	if (chain?.name !== expectedName || chain?.package !== "pi-workbench" || !chain?.description || !Array.isArray(chain?.chain) || chain.chain.length === 0) {
-		fail(`${label}: invalid chain root`);
+	if (expectedName !== "audit" && expectedName !== "deliver") {
+		fail(`${label}: unexpected workflow name ${expectedName}`);
 		continue;
 	}
-	const available = new Set();
-	const outputPaths = new Set();
-	const topology = [];
-	for (let index = 0; index < chain.chain.length; index += 1) {
-		const step = chain.chain[index];
-		const produced = new Set();
-		if (Array.isArray(step.parallel)) {
-			for (const key of Object.keys(step)) if (!allowedGroupKeys.has(key)) fail(`${label} step ${index + 1}: unsupported group key ${key}`);
-			if (step.parallel.length !== 2 || step.concurrency !== 2) fail(`${label} step ${index + 1}: parallel review must contain exactly two concurrent tasks`);
-			if (step.parallel.some((task) => expectedAgents[task.agent] === "writer")) fail(`${label} step ${index + 1}: writers may not run in parallel`);
-			topology.push(step.parallel.map((task) => task.agent));
-			for (const task of step.parallel) inspectTask(label, index + 1, task, available, produced, outputPaths);
-		} else {
-			topology.push(step.agent);
-			inspectTask(label, index + 1, step, available, produced, outputPaths);
-		}
-		for (const output of produced) available.add(output);
-	}
-	if (chain.chain.at(-1)?.outputMode !== "inline") fail(`${label}: final step must return inline`);
-	if (JSON.stringify(chain).includes("SHIPYARD") || JSON.stringify(chain).includes("team_")) fail(`${label}: legacy orchestration marker remains`);
-	if (expectedName === "audit") {
-		const expected = [["pi-workbench.reviewer", "pi-workbench.reviewer"], "pi-workbench.reviewer"];
-		if (JSON.stringify(topology) !== JSON.stringify(expected)) fail(`${label}: audit topology changed`);
-	}
-	if (expectedName === "deliver") {
-		const expected = [
-			"pi-workbench.planner",
-			"pi-workbench.worker",
-			["pi-workbench.reviewer", "pi-workbench.reviewer"],
-			"pi-workbench.worker",
-			"pi-workbench.reviewer",
-		];
-		if (JSON.stringify(topology) !== JSON.stringify(expected)) fail(`${label}: delivery topology changed`);
-	}
+	for (const error of workflowDefinitionErrors(expectedName, chain, label)) fail(error);
 }
 
 // Composition and command/tool surface.
@@ -285,9 +260,9 @@ const entrySource = readFileSync(path.join(root, "extensions", "index.ts"), "utf
 const composition = [
 	"registerSubagents(pi)",
 	"registerRawSubagentBoundary(pi)",
-	"registerWorkbenchRepoTool(pi)",
+	"registerInspectRepoTool(pi)",
 	"if (isChildSession()) return",
-	"loadWorkbenchConfig()",
+	"loadEngineeringConfig()",
 	"new WriterCoordinator(",
 	"new SubagentRpcClient(",
 	"createWorkflowService({",
@@ -302,9 +277,9 @@ for (const marker of composition) {
 }
 if ((entrySource.match(/new SubagentRpcClient\(/g) ?? []).length !== 1) fail("extensions/index.ts: must construct exactly one shared RPC client");
 if (!entrySource.includes('pi.events.on("subagent:async-complete"') || !entrySource.includes("writerCoordinator.releaseRun(runId)")) {
-	fail("extensions/index.ts: async completion must release writer leases");
+	fail("extensions/index.ts: async completion must release write locks");
 }
-if (!entrySource.includes("reconcileWriterLeases(writerCoordinator, rpc)")) fail("extensions/index.ts: session startup must reconcile writer leases");
+if (!entrySource.includes("reconcileWriterLeases(writerCoordinator, rpc)")) fail("extensions/index.ts: session startup must reconcile write locks");
 for (const forbidden of ["resources_discover", "SUBAGENTS_SKILL", "registerTeams", "registerDynamic", "registerShipyard"]) {
 	if (entrySource.includes(forbidden)) fail(`extensions/index.ts: obsolete or alternate policy surface ${forbidden}`);
 }
@@ -325,10 +300,10 @@ for (const file of extensionFiles) {
 const allSource = extensionFiles.map((file) => readFileSync(file, "utf8")).join("\n");
 if (/from\s+["'][^"']*pi-subagents\/src\//.test(allSource)) fail("extensions: must not deep-import pi-subagents internals");
 const registeredTools = [...allSource.matchAll(/registerTool\(\{[\s\S]{0,160}?name:\s*["']([^"']+)["']/g)].map((match) => match[1]);
-assertExactSet(registeredTools, ["subagent", "workbench_repo", "workbench_route"], "registered Workbench tools");
+assertExactSet(registeredTools, ["subagent", "inspect_repo", "assign_engineering"], "registered Pi Engineering tools");
 const routerSource = readFileSync(path.join(root, "extensions", "router.ts"), "utf8");
 const routerCommands = [...routerSource.matchAll(/\.registerCommand\(["']([^"']+)["']/g)].map((match) => match[1]);
-assertExactSet(routerCommands, ["work", "workbench"], "router commands");
+assertExactSet(routerCommands, ["eng", "engineering", "work", "workbench"], "router commands");
 
 const promptFiles = walk(path.join(root, "prompts"), (file) => file.endsWith(".md"));
 if (promptFiles.length > 0) fail("prompts/: alternate command templates are not allowed");
@@ -336,7 +311,7 @@ const exampleFiles = walk(path.join(root, "examples"), () => true);
 if (exampleFiles.length > 0) fail("examples/: programmable workflow examples are not part of the lean harness");
 
 if (errors.length > 0) {
-	console.error("Pi Workbench validation failed:");
+	console.error("Pi Engineering validation failed:");
 	for (const error of errors) console.error(`- ${error}`);
 	process.exit(1);
 }

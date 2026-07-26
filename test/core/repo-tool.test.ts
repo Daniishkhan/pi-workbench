@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import registerRepoTool from "../../extensions/core/repo-tool.ts";
 
-test("registers workbench_repo and executes only the built read-only Git command", async () => {
+test("registers inspect_repo and executes only the built read-only Git command", async () => {
 	let tool: any;
 	const calls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
 	const pi = {
@@ -13,7 +13,7 @@ test("registers workbench_repo and executes only the built read-only Git command
 		},
 	};
 	registerRepoTool(pi as never);
-	assert.equal(tool.name, "workbench_repo");
+	assert.equal(tool.name, "inspect_repo");
 
 	const result = await tool.execute("call", { action: "status" }, undefined, undefined, { cwd: "/repo" });
 	assert.deepEqual(calls, [{
@@ -25,7 +25,7 @@ test("registers workbench_repo and executes only the built read-only Git command
 	assert.equal(result.details.truncated, false);
 });
 
-test("workbench_repo reports Git failures and honors pre-abort", async () => {
+test("inspect_repo reports Git failures and honors pre-abort", async () => {
 	let tool: any;
 	const pi = {
 		registerTool(value: unknown) { tool = value; },
@@ -40,6 +40,6 @@ test("workbench_repo reports Git failures and honors pre-abort", async () => {
 	controller.abort();
 	await assert.rejects(
 		() => tool.execute("call", { action: "status" }, controller.signal, undefined, { cwd: "/repo" }),
-		/workbench_repo cancelled/,
+		/inspect_repo cancelled/,
 	);
 });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Recommended local model fleet for the four bounded Workbench roles. Agent prompts remain model-agnostic.",
+  "description": "Recommended local model fleet for the four bounded Pi Engineering specialists. Specialist prompts remain model-agnostic.",
   "agentOverrides": {
     "pi-workbench.fast-scout": {
       "model": "google-vertex/gemini-3.6-flash",

@@ -16,7 +16,7 @@ if (locked?.resolved !== expectedSource || typeof locked.integrity !== "string" 
 }
 const runtimeRoot = path.join(root, "node_modules", "pi-subagents");
 const runtimePackagePath = path.join(runtimeRoot, "package.json");
-if (!existsSync(runtimePackagePath)) throw new Error("pi-subagents is not installed. Run npm install in the Workbench package.");
+if (!existsSync(runtimePackagePath)) throw new Error("pi-subagents is not installed. Run npm install in the Pi Engineering package.");
 const runtimePackage = JSON.parse(readFileSync(runtimePackagePath, "utf8"));
 if (runtimePackage.name !== "pi-subagents" || runtimePackage.version !== "0.35.1") {
 	throw new Error(`Unexpected pi-subagents package identity: ${runtimePackage.name}@${runtimePackage.version}`);

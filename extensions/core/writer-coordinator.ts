@@ -210,7 +210,7 @@ export class WriterCoordinator {
 					try { fs.unlinkSync(file); } catch { /* another coordinator won */ }
 					continue;
 				}
-				if (Date.now() >= deadline) throw new Error(`Workbench writer guard timed out waiting to inspect ${canonicalWriterCwd(cwd)}.`);
+				if (Date.now() >= deadline) throw new Error(`Engineering write lock timed out waiting to inspect ${canonicalWriterCwd(cwd)}.`);
 				Atomics.wait(sleepCell, 0, 0, LOCK_WAIT_MS);
 			}
 		}
@@ -226,7 +226,7 @@ export class WriterCoordinator {
 
 	acquire(cwd: string, owner: string): WriterLease | undefined {
 		if (!this.#enabled) return undefined;
-		if (!owner.trim()) throw new Error("Workbench writer guard requires a non-empty owner label.");
+		if (!owner.trim()) throw new Error("Engineering write lock requires a non-empty owner label.");
 		const canonical = canonicalWriterCwd(cwd);
 		return this.#withCwdLock(canonical, () => {
 			for (const existing of this.#locatedForCwd(canonical)) {
@@ -238,11 +238,11 @@ export class WriterCoordinator {
 			if (blocking) {
 				const existing = blocking.lease;
 				const detail = `'${existing.owner}' already owns ${canonical}${existing.runId ? ` (run ${existing.runId})` : ""}${existing.uncertain ? " (launch uncertain)" : ""}`;
-				throw new Error(`Workbench writer guard: ${detail}. Wait for it to finish, inspect /workbench, or use an isolated worktree.`);
+				throw new Error(`Engineering write lock: ${detail}. Wait for it to finish, inspect /engineering, or use an isolated worktree.`);
 			}
 			const dir = this.#dir(canonical);
 			if (fs.existsSync(dir)) {
-				throw new Error(`Workbench writer guard: an unreadable lease already exists for ${canonical}. Wait for it to finish, inspect /workbench, or use an isolated worktree.`);
+				throw new Error(`Engineering write lock: an unreadable lock already exists for ${canonical}. Wait for it to finish, inspect /engineering, or use an isolated worktree.`);
 			}
 			const lease: WriterLease = {
 				version: 1,

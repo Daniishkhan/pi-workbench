@@ -1,5 +1,5 @@
 {
-  "writerGuard": {
+  "writeLock": {
     "enabled": true
   }
 }

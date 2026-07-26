@@ -63,7 +63,7 @@ test("range diff and blame inspect committed history", async () => {
 	try {
 		execFileSync("git", ["init", "-q"], { cwd: repo });
 		execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repo });
-		execFileSync("git", ["config", "user.name", "Workbench Test"], { cwd: repo });
+		execFileSync("git", ["config", "user.name", "Pi Engineering Test"], { cwd: repo });
 		await writeFile(path.join(repo, "file.txt"), "first\n");
 		execFileSync("git", ["add", "file.txt"], { cwd: repo });
 		execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
@@ -86,7 +86,7 @@ test("status does not refresh or rewrite the Git index", async () => {
 	try {
 		execFileSync("git", ["init", "-q"], { cwd: repo });
 		execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repo });
-		execFileSync("git", ["config", "user.name", "Workbench Test"], { cwd: repo });
+		execFileSync("git", ["config", "user.name", "Pi Engineering Test"], { cwd: repo });
 		await writeFile(path.join(repo, "file.txt"), "content\n");
 		execFileSync("git", ["add", "file.txt"], { cwd: repo });
 		execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo });

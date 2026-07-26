@@ -22,18 +22,18 @@ const Params = Type.Object({
 	lineEnd: Type.Optional(Type.Integer({ minimum: 1 })),
 }, { additionalProperties: false });
 
-export default function registerRepoTool(pi: ExtensionAPI): void {
+export default function registerInspectRepoTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "workbench_repo",
-		label: "Workbench Repo",
+		name: "inspect_repo",
+		label: "Inspect Repo",
 		description: `Inspect Git without arbitrary commands or mutations. Supports status, diffs, changed files, show, log, and blame. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
 		promptSnippet: "Inspect the current repository with read-only Git commands",
 		promptGuidelines: [
-			"Use workbench_repo for Git inspection; paths are repository-relative and range diffs use base...head merge-base semantics.",
+			"Use inspect_repo for Git inspection; paths are repository-relative and range diffs use base...head merge-base semantics.",
 		],
 		parameters: Params,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			if (signal?.aborted) throw new Error("workbench_repo cancelled");
+			if (signal?.aborted) throw new Error("inspect_repo cancelled");
 			const args = buildReadOnlyGitArgs(ctx.cwd, params);
 			const result = await pi.exec("git", args, { cwd: ctx.cwd, signal, timeout: 30_000 });
 			if (result.code !== 0) {

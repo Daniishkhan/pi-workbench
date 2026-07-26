@@ -1,32 +1,32 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerSubagents from "pi-subagents";
-import { loadWorkbenchConfig } from "./core/config.ts";
+import { loadEngineeringConfig } from "./core/config.ts";
 import { isChildSession } from "./core/env.ts";
 import registerRawSubagentBoundary from "./core/runtime-boundary.ts";
 import { runIdFromAsyncComplete } from "./core/run-lifecycle.ts";
 import { SubagentRpcClient } from "./core/subagent-rpc.ts";
 import { WriterCoordinator } from "./core/writer-coordinator.ts";
 import { reconcileWriterLeases } from "./core/writer-reconciliation.ts";
-import registerWorkbenchRepoTool from "./core/repo-tool.ts";
+import registerInspectRepoTool from "./core/repo-tool.ts";
 import registerRouter from "./router.ts";
 import createWorkflowService from "./workflows.ts";
 
-export default function piWorkbench(pi: ExtensionAPI): void {
+export default function piEngineering(pi: ExtensionAPI): void {
 	// Register the immutable upstream runtime before constructing its shared RPC
-	// client. Workbench deliberately does not rediscover the upstream policy skill.
+	// client. Pi Engineering deliberately does not rediscover the upstream policy skill.
 	registerSubagents(pi);
 	registerRawSubagentBoundary(pi);
-	registerWorkbenchRepoTool(pi);
+	registerInspectRepoTool(pi);
 
 	// Leaf sessions need the runtime and repository inspection tool, but never a
 	// second orchestration front door.
 	if (isChildSession()) return;
 
-	const config = loadWorkbenchConfig();
-	const writerCoordinator = new WriterCoordinator({ enabled: config.writerGuard.enabled });
+	const config = loadEngineeringConfig();
+	const writerCoordinator = new WriterCoordinator({ enabled: config.writeLock.enabled });
 	const rpc = new SubagentRpcClient(pi.events, {
-		label: "Pi Workbench",
-		source: "@danish/pi-workbench",
+		label: "Pi Engineering",
+		source: "@danish/pi-engineering",
 	});
 	const workflows = createWorkflowService({ writerCoordinator, rpc });
 	registerRouter(pi, { config, workflows, writerCoordinator, rpc });

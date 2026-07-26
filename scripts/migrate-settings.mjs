@@ -12,7 +12,7 @@ const OLD_SOURCES = new Set([
 	"./packages/pi-agent-teams",
 	"./packages/pi-dynamic-workflows",
 ]);
-const WORKBENCH_SOURCE = "./packages/pi-workbench";
+const ENGINEERING_SOURCE = "./packages/pi-workbench";
 const LEGACY_RUNTIME = "npm:pi-subagents@0.35.1";
 const EMBEDDED_RUNTIME_COMMIT = "105c1399d36517292cc7dbe1f56f4724de39bd10";
 const REMOVED_AGENT_OVERRIDES = new Set([
@@ -70,7 +70,7 @@ export function atomicWriteJson(file, value) {
 function loadProfile(profilePath = path.join(packageRoot, "profiles", "recommended-agent-overrides.json")) {
 	const profile = JSON.parse(readFileSync(profilePath, "utf8"));
 	if (profile.schemaVersion !== 1 || !profile.agentOverrides || typeof profile.agentOverrides !== "object") {
-		throw new Error(`Invalid Workbench agent profile: ${profilePath}`);
+		throw new Error(`Invalid Pi Engineering agent profile: ${profilePath}`);
 	}
 	return profile.agentOverrides;
 }
@@ -83,19 +83,19 @@ export function buildMigratedSettings(settings, profileOverrides = loadProfile()
 	if (runtimeEntries.length === 1 && packageSource(runtimeEntries[0]) !== LEGACY_RUNTIME) {
 		throw new Error(`Refusing to replace unexpected standalone runtime ${packageSource(runtimeEntries[0])}; expected ${LEGACY_RUNTIME}.`);
 	}
-	const workbenchEntries = settings.packages.filter((entry) => packageSource(entry) === WORKBENCH_SOURCE);
-	if (workbenchEntries.length > 1) throw new Error("settings.json contains duplicate Pi Workbench package entries.");
+	const engineeringEntries = settings.packages.filter((entry) => packageSource(entry) === ENGINEERING_SOURCE);
+	if (engineeringEntries.length > 1) throw new Error("settings.json contains duplicate Pi Engineering package entries.");
 	const candidateIndices = settings.packages.flatMap((entry, index) => (
-		isStandaloneRuntime(entry) || OLD_SOURCES.has(packageSource(entry)) || packageSource(entry) === WORKBENCH_SOURCE ? [index] : []
+		isStandaloneRuntime(entry) || OLD_SOURCES.has(packageSource(entry)) || packageSource(entry) === ENGINEERING_SOURCE ? [index] : []
 	));
 	if (candidateIndices.length === 0) throw new Error("No known orchestration package entry was found to migrate.");
 	const runtimeIndex = settings.packages.findIndex(isStandaloneRuntime);
-	const workbenchIndex = settings.packages.findIndex((entry) => packageSource(entry) === WORKBENCH_SOURCE);
-	const insertAt = runtimeIndex >= 0 ? runtimeIndex : workbenchIndex >= 0 ? workbenchIndex : Math.min(...candidateIndices);
+	const engineeringIndex = settings.packages.findIndex((entry) => packageSource(entry) === ENGINEERING_SOURCE);
+	const insertAt = runtimeIndex >= 0 ? runtimeIndex : engineeringIndex >= 0 ? engineeringIndex : Math.min(...candidateIndices);
 	const packages = settings.packages.filter((entry) => (
-		!isStandaloneRuntime(entry) && !OLD_SOURCES.has(packageSource(entry)) && packageSource(entry) !== WORKBENCH_SOURCE
+		!isStandaloneRuntime(entry) && !OLD_SOURCES.has(packageSource(entry)) && packageSource(entry) !== ENGINEERING_SOURCE
 	));
-	packages.splice(Math.min(Math.max(0, insertAt), packages.length), 0, WORKBENCH_SOURCE);
+	packages.splice(Math.min(Math.max(0, insertAt), packages.length), 0, ENGINEERING_SOURCE);
 	const existingSubagents = settings.subagents && typeof settings.subagents === "object" && !Array.isArray(settings.subagents)
 		? settings.subagents
 		: {};

@@ -11,8 +11,10 @@ interface ChainTask {
 	agent: string;
 	task: string;
 	as?: string;
+	label?: string;
 	output?: string;
 	outputMode?: string;
+	outputSchema?: Record<string, unknown>;
 }
 
 interface ChainStep extends Partial<ChainTask> {
@@ -24,12 +26,58 @@ interface ChainFile {
 	chain: ChainStep[];
 }
 
+interface JsonSchemaNode {
+	type?: string;
+	const?: string;
+	additionalProperties?: boolean;
+	required?: string[];
+	enum?: string[];
+	maxItems?: number;
+	minItems?: number;
+	items?: JsonSchemaNode;
+	oneOf?: JsonSchemaNode[];
+	properties?: Record<string, JsonSchemaNode>;
+}
+
 async function chain(name: "audit" | "deliver"): Promise<ChainFile> {
 	return JSON.parse(await readFile(path.resolve("chains", "workbench", `${name}.chain.json`), "utf8")) as ChainFile;
 }
 
 function children(value: ChainFile): ChainTask[] {
 	return value.chain.flatMap((step) => step.parallel ?? [step as ChainTask]);
+}
+
+function assertReviewEnvelope(task: ChainTask): void {
+	const schema = task.outputSchema as JsonSchemaNode | undefined;
+	assert.ok(schema, `${task.label ?? task.agent} must require structured review output`);
+	assert.equal(schema.type, "object");
+	assert.equal(schema.additionalProperties, false);
+	assert.deepEqual(schema.required, ["verdict", "summary", "findings", "validationEvidence", "residualRisks"]);
+	assert.deepEqual(schema.properties?.verdict?.enum, ["READY", "NOT_READY"]);
+	assert.equal(schema.oneOf?.[0]?.properties?.verdict?.const, "READY");
+	assert.equal(schema.oneOf?.[0]?.properties?.findings?.maxItems, 0);
+	assert.equal(schema.oneOf?.[0]?.properties?.ledgerDisposition?.properties?.result?.const, "READY");
+	assert.equal(schema.oneOf?.[1]?.properties?.verdict?.const, "NOT_READY");
+	assert.equal(schema.oneOf?.[1]?.properties?.findings?.minItems, 1);
+	assert.equal(schema.oneOf?.[1]?.properties?.ledgerDisposition?.properties?.result?.const, "NOT_READY");
+
+	const finding = schema.properties?.findings?.items;
+	assert.deepEqual(finding?.required, [
+		"severity", "confidence", "path", "line", "violatedContract", "scenario", "safeFix", "validation",
+	]);
+	assert.deepEqual(finding?.properties?.severity?.enum, ["P0", "P1", "P2", "P3"]);
+	assert.deepEqual(finding?.properties?.line?.required, ["start", "end"]);
+	assert.ok(finding?.properties?.line?.properties?.start);
+	assert.ok(finding?.properties?.line?.properties?.end);
+
+	const evidence = schema.properties?.validationEvidence?.items;
+	assert.deepEqual(evidence?.required, ["check", "status", "evidence"]);
+	assert.deepEqual(evidence?.properties?.status?.enum, ["VERIFIED", "MISSING", "STALE", "NOT_APPLICABLE"]);
+
+	const disposition = schema.properties?.ledgerDisposition;
+	assert.deepEqual(disposition?.required, ["artifactPath", "gateId", "result", "evidenceSummary", "requiredNextState"]);
+	assert.deepEqual(disposition?.properties?.result?.enum, ["READY", "NOT_READY"]);
+	assert.equal(schema.required?.includes("ledgerDisposition"), false, "the internal plan disposition is optional without a named gate");
 }
 
 test("audit is exactly two fresh independent reviews followed by one synthesis reviewer", async () => {
@@ -41,11 +89,19 @@ test("audit is exactly two fresh independent reviews followed by one synthesis r
 	assert.equal(value.chain[0].parallel?.length, 2);
 	assert.match(value.chain[0].parallel![0].task, /correctness and runtime/i);
 	assert.match(value.chain[0].parallel![1].task, /tests, simplicity, and applicable security/i);
-	assert.equal(tasks[0].outputMode, "file-only");
-	assert.equal(tasks[1].outputMode, "file-only");
+	assert.match(value.chain[0].parallel![0].task, /Spec baseline/i);
+	assert.match(value.chain[0].parallel![1].task, /acceptance coverage/i);
+	assert.equal(tasks[0].outputMode, undefined, "structured receipts are passed by value, not duplicated into prose files");
+	assert.equal(tasks[1].outputMode, undefined, "structured receipts are passed by value, not duplicated into prose files");
 	assert.equal(tasks[2].outputMode, "inline");
+	assert.equal(tasks[0].output, undefined);
+	assert.equal(tasks[1].output, undefined);
+	for (const task of tasks.slice(0, 2)) assertReviewEnvelope(task);
+	assert.equal(tasks[2].outputSchema, undefined, "the terminal verdict must remain human-readable in async completion output");
 	assert.match(tasks[2].task, /\{outputs\.correctness\}/);
 	assert.match(tasks[2].task, /\{outputs\.quality\}/);
+	assert.match(tasks[2].task, /first line is READY[\s\S]*otherwise NOT READY/i);
+	assert.match(tasks[2].task, /work-plan disposition/i);
 });
 
 test("deliver is the bounded six-child plan, write, review, supported-fix, final-review loop", async () => {
@@ -61,8 +117,23 @@ test("deliver is the bounded six-child plan, write, review, supported-fix, final
 		"pi-workbench.reviewer",
 	]);
 	assert.equal(value.chain[2].parallel?.length, 2);
-	assert.equal(tasks.slice(0, -1).every((task) => task.outputMode === "file-only"), true);
+	assert.equal(tasks[0].outputMode, "file-only");
+	assert.equal(tasks[1].outputMode, "file-only");
+	assert.equal(tasks[4].outputMode, "file-only");
 	assert.equal(tasks.at(-1)?.outputMode, "inline");
+	assert.equal(tasks[0].outputSchema, undefined);
+	assert.equal(tasks[1].outputSchema, undefined);
+	assert.equal(tasks[4].outputSchema, undefined);
+	assert.equal(tasks[5].outputSchema, undefined, "the terminal verdict must remain human-readable in async completion output");
+	for (const task of [tasks[2], tasks[3]]) assertReviewEnvelope(task);
+	assert.equal(tasks[2].output, undefined);
+	assert.equal(tasks[2].outputMode, undefined);
+	assert.equal(tasks[3].output, undefined);
+	assert.equal(tasks[3].outputMode, undefined);
+	assert.match(tasks[0].task, /stable task or milestone ID/i);
+	assert.match(tasks[1].task, /status, Evidence, and Handoff/i);
+	assert.match(tasks[2].task, /named stable task, milestone, or gate against its acceptance criteria/i);
+	assert.match(tasks[3].task, /named stable task, milestone, or gate against its acceptance criteria/i);
 	assert.match(tasks[4].task, /apply only supported fixes/i);
 	assert.match(tasks[4].task, /make no changes if no supported findings exist/i);
 	assert.deepEqual(new Set(tasks.map((task) => task.agent)), new Set([
@@ -108,10 +179,10 @@ function service(rpc: FakeRpc, coordinator: FakeCoordinator) {
 
 const ctx = { cwd: "/repo" } as ExtensionContext;
 
-test("audit launches the static chain read-only with the routed 20-minute limit", async () => {
+test("audit launches the static chain read-only with standard effort", async () => {
 	const rpc = new FakeRpc();
 	const coordinator = new FakeCoordinator();
-	const launched = await service(rpc, coordinator).spawn(ctx, "audit", "  inspect target  ", { timeoutMs: 20 * 60_000 });
+	const launched = await service(rpc, coordinator).spawn(ctx, "audit", "  inspect target  ", "standard");
 	assert.equal(launched.runId, "run-2");
 	assert.deepEqual(coordinator.acquired, []);
 	assert.deepEqual(rpc.calls.map((call) => call.method), ["ping", "spawn"]);
@@ -121,33 +192,31 @@ test("audit launches the static chain read-only with the routed 20-minute limit"
 	assert.equal(params.context, "fresh");
 	assert.equal(params.async, true);
 	assert.equal(params.clarify, false);
-	assert.equal(params.artifacts, false, "file-only receipts use the upstream chain run directory without bulky child artifacts");
-	assert.equal("runId" in params, false, "Workbench must not invent a parallel run id");
+	assert.equal(params.artifacts, true, "relative receipts must resolve in upstream run-scoped storage, not the worktree");
+	assert.equal("runId" in params, false, "Pi Engineering must not invent a parallel run id");
 	assert.equal(children({ name: "audit", chain: params.chain as ChainStep[] }).length, 3);
 });
 
-test("deliver acquires one writer lease and launches the static six-child chain", async () => {
+test("deliver acquires one write lock and launches the static six-child chain", async () => {
 	const rpc = new FakeRpc();
 	const coordinator = new FakeCoordinator();
-	const launched = await service(rpc, coordinator).spawn(ctx, "deliver", "implement target", { timeoutMs: 45 * 60_000 });
+	const launched = await service(rpc, coordinator).spawn(ctx, "deliver", "implement target", "standard");
 	assert.equal(launched.runId, "run-2");
-	assert.deepEqual(coordinator.acquired, [{ cwd: "/repo", owner: "workbench:deliver" }]);
+	assert.deepEqual(coordinator.acquired, [{ cwd: "/repo", owner: "engineering:deliver" }]);
 	assert.deepEqual(coordinator.attached, [{ token: "lease", runId: "run-2" }]);
 	assert.deepEqual(coordinator.released, []);
 	assert.equal(rpc.calls[1].params.maxRuntimeMs, 45 * 60_000);
 	assert.equal(children({ name: "deliver", chain: rpc.calls[1].params.chain as ChainStep[] }).length, 6);
 });
 
-test("workflow input and route ceilings fail before acquiring a lease or calling RPC", async () => {
-	for (const [name, task, timeoutMs, message] of [
-		["audit", "target", 20 * 60_000 + 1, /20-minute ceiling/],
-		["deliver", "target", 45 * 60_000 + 1, /45-minute ceiling/],
-		["deliver", "   ", 45 * 60_000, /non-empty task/],
-		["audit", "target", 0, /positive integer timeoutMs/],
+test("workflow input and effort fail before acquiring a lease or calling RPC", async () => {
+	for (const [name, task, effort, message] of [
+		["deliver", "   ", "standard", /non-empty task/],
+		["audit", "target", "unbounded", /effort must be quick, standard, or deep/],
 	] as const) {
 		const rpc = new FakeRpc();
 		const coordinator = new FakeCoordinator();
-		await assert.rejects(() => service(rpc, coordinator).spawn(ctx, name, task, { timeoutMs }), message);
+		await assert.rejects(() => service(rpc, coordinator).spawn(ctx, name, task, effort as never), message);
 		assert.deepEqual(rpc.calls, []);
 		assert.deepEqual(coordinator.acquired, []);
 	}

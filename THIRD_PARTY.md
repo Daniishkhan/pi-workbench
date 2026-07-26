@@ -1,6 +1,6 @@
 # Third-party components
 
-Pi Workbench keeps its orchestration code and externally maintained runtime code separate, even though Workbench is the single top-level Pi package.
+Pi Engineering keeps its orchestration code and externally maintained runtime code separate, even though Pi Engineering is the single top-level Pi package.
 
 ## pi-subagents
 
@@ -11,12 +11,12 @@ Pi Workbench keeps its orchestration code and externally maintained runtime code
 - Dependency source: the immutable GitHub codeload archive for that commit
 - Locking: `package-lock.json` records the archive URL and SHA-512 integrity
 
-The snapshot is used without source modifications. Workbench imports only the package's public default extension entry point at runtime. Workbench integration uses pi-subagents' public versioned RPC contract; it does not deep-import upstream implementation modules.
+The snapshot is used without source modifications. Pi Engineering imports only the package's public default extension entry point at runtime. Pi Engineering integration uses pi-subagents' public versioned RPC contract; it does not deep-import upstream implementation modules.
 
-To update it, select and review a new upstream commit, update both `package.json` and `scripts/verify-runtime.mjs`, run `npm install`, then run the full Workbench test and Pi discovery suite. Never point a released Workbench version at a floating branch.
+To update it, select and review a new upstream commit, update both `package.json` and `scripts/verify-runtime.mjs`, run `npm install`, then run the full Pi Engineering test and Pi discovery suite. Never point a released Pi Engineering version at a floating branch.
 
 `pi-subagents` brings its own declared runtime dependencies (`jiti`, `yaml`, and `typebox`), recorded in the lockfile.
 
 ## Pi host APIs
 
-`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui`, and `typebox` are host/peer APIs. They are not Workbench-owned runtime forks. Development versions are pinned locally for type-checking; the active Pi installation supplies the runtime APIs.
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui`, and `typebox` are host/peer APIs. They are not Pi Engineering-owned runtime forks. Development versions are pinned locally for type-checking; the active Pi installation supplies the runtime APIs.

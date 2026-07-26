@@ -7,12 +7,12 @@ const NoRawSubagentParams = Type.Object({}, { additionalProperties: false });
 export default function registerRawSubagentBoundary(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "subagent",
-		label: "Subagent (use Workbench)",
-		description: "Direct subagent launches are disabled by Pi Workbench. Use workbench_route so every launch has a fixed role, runtime bound, and writer policy.",
-		promptSnippet: "Use workbench_route; direct subagent launching is disabled",
+		label: "Subagent (use Pi Engineering)",
+		description: "Direct subagent launches are disabled by Pi Engineering. Use assign_engineering so every assignment has a fixed specialist, runtime bound, and write-lock policy.",
+		promptSnippet: "Use assign_engineering; direct subagent launching is disabled",
 		parameters: NoRawSubagentParams,
 		async execute() {
-			throw new Error("Direct subagent launches are disabled. Call workbench_route with inspect, plan, implement, review, deliver, or audit.");
+			throw new Error("Direct subagent launches are disabled. Call assign_engineering with inspect, plan, implement, review, deliver, or audit.");
 		},
 	});
 }

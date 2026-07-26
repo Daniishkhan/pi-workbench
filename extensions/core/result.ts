@@ -1,4 +1,4 @@
-/** Shared tool-result helpers so every Workbench tool returns one shape. */
+/** Shared tool-result helpers so every Pi Engineering tool returns one shape. */
 
 export interface TextToolResult {
 	content: Array<{ type: "text"; text: string }>;

@@ -1,7 +1,7 @@
 {
-  "name": "@danish/pi-workbench",
+  "name": "@danish/pi-engineering",
   "version": "0.2.0",
-  "description": "A lean, bounded Pi harness for inspecting, planning, implementing, reviewing, delivering, and auditing software changes.",
+  "description": "Pi Engineering: a small, bounded team for inspecting, planning, implementing, reviewing, delivering, and auditing software changes.",
   "private": true,
   "type": "module",
   "engines": {
@@ -41,7 +41,7 @@
       "./extensions/index.ts"
     ],
     "skills": [
-      "./skills/pi-workbench"
+      "./skills/pi-engineering"
     ],
     "subagents": {
       "agents": [

@@ -162,8 +162,8 @@ test("ping RPC-level failure releases the lease with a labeled error", async () 
 	const rpc = new FakeRpc((method) => method === "ping" ? reply({ success: false, error: { message: "no session" } }) : reply());
 	const coordinator = new FakeCoordinator();
 	await assert.rejects(
-		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Workbench workflow launch" }),
-		/Workbench workflow launch: pi-subagents RPC unavailable: no session/,
+		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Engineering workflow assignment" }),
+		/Engineering workflow assignment: pi-subagents RPC unavailable: no session/,
 	);
 	assert.deepEqual(coordinator.released, ["token-1"]);
 });
@@ -190,12 +190,12 @@ test("spawn RPC-level rejection journals then releases the lease", async () => {
 	const rpc = new FakeRpc((method) => method === "spawn" ? reply({ success: false, error: { code: "invalid_params", message: "bad agent" } }) : reply());
 	const coordinator = new FakeCoordinator();
 	const guard = await beginGuardedSpawn({
-		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Workbench launch",
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Engineering assignment",
 	});
 	const journal: string[] = [];
 	await assert.rejects(
 		() => guard.spawn({ params: {}, onRejected: () => { journal.push("rejected"); } }),
-		/Workbench launch failed: invalid_params: bad agent/,
+		/Engineering assignment failed: invalid_params: bad agent/,
 	);
 	assert.deepEqual(journal, ["rejected"]);
 	assert.deepEqual(coordinator.released, ["token-1"]);
@@ -205,7 +205,7 @@ test("spawn RPC-level rejection journals then releases the lease", async () => {
 test("acquire conflicts propagate before any RPC call", async () => {
 	const rpc = new FakeRpc(() => reply());
 	const coordinator = new FakeCoordinator();
-	coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+	coordinator.acquireFailures = [new Error("Engineering write lock: busy")];
 	await assert.rejects(
 		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
 		/busy/,
@@ -218,7 +218,7 @@ test("a terminal blocking lease is reaped and the acquire retried once", async (
 		? reply({ data: { text: "Run: run-old\nState: completed\n" } })
 		: reply({ data: { details: { runId: "run-new" } } }));
 	const coordinator = new FakeCoordinator();
-	coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+	coordinator.acquireFailures = [new Error("Engineering write lock: busy")];
 	coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
 	const guard = await beginGuardedSpawn({
 		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
@@ -234,7 +234,7 @@ test("an active or unverifiable blocking lease keeps the conflict error", async 
 	for (const statusText of ["State: running", "State: mysterious"]) {
 		const rpc = new FakeRpc((method) => method === "status" ? reply({ data: { text: statusText } }) : reply());
 		const coordinator = new FakeCoordinator();
-		coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+		coordinator.acquireFailures = [new Error("Engineering write lock: busy")];
 		coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
 		await assert.rejects(
 			() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),
@@ -247,7 +247,7 @@ test("an active or unverifiable blocking lease keeps the conflict error", async 
 	// A status transport failure is not terminal evidence either.
 	const rpc = new FakeRpc(() => new Error("transport down"));
 	const coordinator = new FakeCoordinator();
-	coordinator.acquireFailures = [new Error("Workbench writer guard: busy")];
+	coordinator.acquireFailures = [new Error("Engineering write lock: busy")];
 	coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
 	await assert.rejects(
 		() => beginGuardedSpawn({ rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test" }),

@@ -1,29 +1,34 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_WORKBENCH_CONFIG, resolveWorkbenchConfig } from "../../extensions/core/config.ts";
+import { DEFAULT_ENGINEERING_CONFIG, resolveEngineeringConfig } from "../../extensions/core/config.ts";
 
-test("defaults to the enabled writer guard", () => {
-	assert.deepEqual(resolveWorkbenchConfig({}), DEFAULT_WORKBENCH_CONFIG);
-	assert.deepEqual(resolveWorkbenchConfig({ writerGuard: {} }), DEFAULT_WORKBENCH_CONFIG);
+test("defaults to the enabled write lock and accepts the legacy key", () => {
+	assert.deepEqual(resolveEngineeringConfig({}), DEFAULT_ENGINEERING_CONFIG);
+	assert.deepEqual(resolveEngineeringConfig({ writeLock: {} }), DEFAULT_ENGINEERING_CONFIG);
+	assert.deepEqual(resolveEngineeringConfig({ writerGuard: {} }), DEFAULT_ENGINEERING_CONFIG);
 });
 
-test("accepts an explicit writer guard setting", () => {
-	assert.deepEqual(resolveWorkbenchConfig({ writerGuard: { enabled: false } }), {
-		writerGuard: { enabled: false },
+test("accepts an explicit write lock setting", () => {
+	assert.deepEqual(resolveEngineeringConfig({ writeLock: { enabled: false } }), {
+		writeLock: { enabled: false },
 	});
 });
 
 test("rejects non-object config shapes", () => {
 	for (const value of [null, [], "bad", 42]) {
-		assert.throws(() => resolveWorkbenchConfig(value), /Pi Workbench config must be an object/);
+		assert.throws(() => resolveEngineeringConfig(value), /Pi Engineering config must be an object/);
 	}
 	for (const value of [null, [], "bad", 42]) {
-		assert.throws(() => resolveWorkbenchConfig({ writerGuard: value }), /writerGuard must be an object/);
+		assert.throws(() => resolveEngineeringConfig({ writeLock: value }), /writeLock must be an object/);
 	}
 });
 
 test("rejects unknown and incorrectly typed settings", () => {
-	assert.throws(() => resolveWorkbenchConfig({ modules: {} }), /unknown key: modules/);
-	assert.throws(() => resolveWorkbenchConfig({ writerGuard: { enabled: "yes" } }), /must be a boolean/);
-	assert.throws(() => resolveWorkbenchConfig({ writerGuard: { enabled: true, mode: "legacy" } }), /unknown key: mode/);
+	assert.throws(() => resolveEngineeringConfig({ modules: {} }), /unknown key: modules/);
+	assert.throws(() => resolveEngineeringConfig({ writeLock: { enabled: "yes" } }), /must be a boolean/);
+	assert.throws(() => resolveEngineeringConfig({ writeLock: { enabled: true, mode: "legacy" } }), /unknown key: mode/);
+	assert.throws(
+		() => resolveEngineeringConfig({ writeLock: {}, writerGuard: {} }),
+		/must not define both writeLock and legacy writerGuard/,
+	);
 });
