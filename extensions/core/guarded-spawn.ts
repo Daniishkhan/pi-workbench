@@ -5,8 +5,8 @@
  * Write-lock lifecycle (identical for one-off specialists and engineering workflows):
  *   1. acquire the lease (writers only), then verify RPC readiness (ping);
  *      any ping failure releases the lease. Acquire is self-healing: a
- *      blocking lease whose run is terminal per RPC status is reaped and the
- *      acquire retried once;
+ *      blocking lease whose run has authoritative terminal artifacts is
+ *      reaped and the acquire retried once;
  *   2. issue the spawn request without wiring caller cancellation into the
  *      acknowledgement wait — an emitted launch must not be orphaned;
  *      cancellation after emission waits for the run id and requests stop;
@@ -17,7 +17,7 @@
  *      uncertain when no run id came back) and ownership moves to the run.
  */
 
-import { classifySubagentStatusText } from "./run-lifecycle.ts";
+import { reconcileSubagentRunState } from "./run-lifecycle.ts";
 import { runIdFromSpawnReply, type SubagentRpcClient, type SubagentRpcReply } from "./subagent-rpc.ts";
 import type { WriterCoordinator, WriterLease } from "./writer-coordinator.ts";
 
@@ -66,9 +66,9 @@ function rpcErrorDetail(reply: SubagentRpcReply, fallback: string): string {
 }
 
 /** Acquire the write lock with self-healing: when the blocking lock belongs
- * to a run that pi-subagents reports as terminal, reap the orphaned lease and
- * retry once instead of failing the launch. Active or unverifiable blockers
- * keep the original conflict error. */
+ * to a run whose durable pi-subagents artifacts confirm termination, reap the
+ * orphaned lease and retry once instead of failing the launch. Active or
+ * unverifiable blockers keep the original conflict error. */
 async function acquireLease(
 	options: BeginGuardedSpawnOptions,
 	coordinator: WriterCoordinator | undefined,
@@ -79,10 +79,16 @@ async function acquireLease(
 	} catch (error) {
 		const blocking = coordinator.get(options.cwd);
 		if (!blocking?.runId) throw error;
-		let state: ReturnType<typeof classifySubagentStatusText> = "unknown";
+		let state: ReturnType<typeof reconcileSubagentRunState> = "unknown";
 		try {
 			const reply = await options.rpc.request("status", { id: blocking.runId }, options.signal);
-			if (reply.success) state = classifySubagentStatusText(reply.data?.text);
+			if (reply.success) {
+				state = reconcileSubagentRunState({
+					runId: blocking.runId,
+					statusText: reply.data?.text,
+					asyncDir: blocking.asyncDir,
+				});
+			}
 		} catch {
 			state = "unknown";
 		}
@@ -146,10 +152,28 @@ export async function beginGuardedSpawn(options: BeginGuardedSpawnOptions): Prom
 				throw new Error(`${options.label} failed: ${rpcErrorDetail(reply, "unknown RPC error")}`);
 			}
 			const runId = runIdFromSpawnReply(reply);
+			const asyncDir = typeof reply.data?.details?.asyncDir === "string" && reply.data.details.asyncDir
+				? reply.data.details.asyncDir
+				: undefined;
 			if (state === "held") {
 				state = "transferred";
-				if (runId) coordinator?.attachRun(lease?.token, runId);
-				else coordinator?.markUncertain(lease?.token);
+				if (runId) {
+					let attached = true;
+					let attachmentError: unknown;
+					try {
+						attached = coordinator?.attachRun(lease?.token, runId, asyncDir) !== false;
+					} catch (error) {
+						attached = false;
+						attachmentError = error;
+					}
+					if (!attached) {
+						try { coordinator?.markUncertain(lease?.token, runId, asyncDir); } catch { /* preserve the acknowledged run id below */ }
+						const stopRequested = await options.rpc.request("stop", { id: runId })
+							.then((stop) => stop.success, () => false);
+						const detail = attachmentError instanceof Error ? ` (${attachmentError.message})` : "";
+						throw new Error(`${options.label} acknowledged run ${runId}, but its writer lease could not be attached${detail}; ${stopRequested ? "stop requested" : "stop could not be confirmed"}. Inspect that run before retrying.`);
+					}
+				} else coordinator?.markUncertain(lease?.token);
 			}
 			if (abortedDuringSpawn || signal?.aborted) {
 				let stopRequested = false;

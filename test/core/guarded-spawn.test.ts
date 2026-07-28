@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 import { beginGuardedSpawn } from "../../extensions/core/guarded-spawn.ts";
 import type { SubagentRpcReply } from "../../extensions/core/subagent-rpc.ts";
@@ -20,8 +23,11 @@ class FakeCoordinator {
 	readonly acquired: string[] = [];
 	readonly released: Array<string | undefined> = [];
 	readonly uncertain: Array<string | undefined> = [];
-	readonly attached: Array<{ token: string | undefined; runId: string | undefined }> = [];
+	readonly uncertainRuns: Array<{ runId?: string; asyncDir?: string }> = [];
+	readonly attached: Array<{ token: string | undefined; runId: string | undefined; asyncDir?: string }> = [];
 	acquireFailures: Error[] = [];
+	attachResult = true;
+	attachError?: Error;
 	blocking?: WriterLease;
 	acquire(cwd: string, owner: string): WriterLease {
 		const failure = this.acquireFailures.shift();
@@ -33,8 +39,15 @@ class FakeCoordinator {
 		return this.blocking ? { ...this.blocking, cwd } : undefined;
 	}
 	release(token: string | undefined): boolean { this.released.push(token); return true; }
-	markUncertain(token: string | undefined): void { this.uncertain.push(token); }
-	attachRun(token: string | undefined, runId: string | undefined): void { this.attached.push({ token, runId }); }
+	markUncertain(token: string | undefined, runId?: string, asyncDir?: string): void {
+		this.uncertain.push(token);
+		this.uncertainRuns.push({ ...(runId ? { runId } : {}), ...(asyncDir ? { asyncDir } : {}) });
+	}
+	attachRun(token: string | undefined, runId: string | undefined, asyncDir?: string): boolean {
+		if (this.attachError) throw this.attachError;
+		this.attached.push({ token, runId, ...(asyncDir ? { asyncDir } : {}) });
+		return this.attachResult;
+	}
 }
 
 function reply(overrides: Partial<SubagentRpcReply> = {}): SubagentRpcReply {
@@ -109,13 +122,13 @@ test("an abort before emission releases the held lease and never spawns", async 
 });
 
 test("writer spawn attaches the lease to the returned run id", async () => {
-	const rpc = new FakeRpc(() => reply({ data: { details: { runId: "run-9" } } }));
+	const rpc = new FakeRpc(() => reply({ data: { details: { runId: "run-9", asyncDir: "/tmp/run-9" } } }));
 	const coordinator = new FakeCoordinator();
 	const guard = await beginGuardedSpawn({
 		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "writer", writeCapable: true, label: "Test",
 	});
 	await guard.spawn({ params: {} });
-	assert.deepEqual(coordinator.attached, [{ token: "token-1", runId: "run-9" }]);
+	assert.deepEqual(coordinator.attached, [{ token: "token-1", runId: "run-9", asyncDir: "/tmp/run-9" }]);
 	assert.deepEqual(coordinator.released, []);
 	guard.discard(); // no-op: the run owns the lease now
 	assert.deepEqual(coordinator.released, []);
@@ -202,6 +215,28 @@ test("spawn RPC-level rejection journals then releases the lease", async () => {
 	assert.deepEqual(coordinator.uncertain, []); // a clean rejection is never uncertain
 });
 
+test("an acknowledged writer whose lease cannot be attached is stopped and remains fail-safe", async () => {
+	const rpc = new FakeRpc((method) => method === "spawn"
+		? reply({ data: { details: { runId: "run-unattached", asyncDir: "/tmp/run-unattached" } } })
+		: reply());
+	const coordinator = new FakeCoordinator();
+	coordinator.attachResult = false;
+	const guard = await beginGuardedSpawn({
+		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
+	});
+	await assert.rejects(
+		() => guard.spawn({ params: {} }),
+		/acknowledged run run-unattached, but its writer lease could not be attached; stop requested/,
+	);
+	assert.deepEqual(rpc.calls.map((call) => call.method), ["ping", "spawn", "stop"]);
+	assert.deepEqual(rpc.calls[2]?.params, { id: "run-unattached" });
+	assert.deepEqual(coordinator.uncertain, ["token-1"]);
+	assert.deepEqual(coordinator.uncertainRuns, [{ runId: "run-unattached", asyncDir: "/tmp/run-unattached" }]);
+	assert.deepEqual(coordinator.released, []);
+	guard.discard();
+	assert.deepEqual(coordinator.released, []);
+});
+
 test("acquire conflicts propagate before any RPC call", async () => {
 	const rpc = new FakeRpc(() => reply());
 	const coordinator = new FakeCoordinator();
@@ -213,25 +248,31 @@ test("acquire conflicts propagate before any RPC call", async () => {
 	assert.equal(rpc.calls.length, 0);
 });
 
-test("a terminal blocking lease is reaped and the acquire retried once", async () => {
-	const rpc = new FakeRpc((method) => method === "status"
-		? reply({ data: { text: "Run: run-old\nState: completed\n" } })
-		: reply({ data: { details: { runId: "run-new" } } }));
-	const coordinator = new FakeCoordinator();
-	coordinator.acquireFailures = [new Error("Engineering write lock: busy")];
-	coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old" };
-	const guard = await beginGuardedSpawn({
-		rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
-	});
-	assert.deepEqual(coordinator.released, ["old-token"]);
-	assert.equal(guard.lease?.token, "token-1");
-	assert.equal(rpc.calls[0]?.method, "status");
-	assert.deepEqual(rpc.calls[0]?.params, { id: "run-old" });
-	assert.equal(rpc.calls[1]?.method, "ping");
+test("a blocking lease with confirmed terminal artifacts is reaped and retried once", async () => {
+	const asyncDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workbench-terminal-run-"));
+	try {
+		fs.writeFileSync(path.join(asyncDir, "status.json"), `${JSON.stringify({ runId: "run-old", state: "completed", endedAt: 42 })}\n`);
+		const rpc = new FakeRpc((method) => method === "status"
+			? reply({ data: { text: `Run: run-old\nState: completed\nDir: ${asyncDir}\n` } })
+			: reply({ data: { details: { runId: "run-new" } } }));
+		const coordinator = new FakeCoordinator();
+		coordinator.acquireFailures = [new Error("Engineering write lock: busy")];
+		coordinator.blocking = { version: 1, token: "old-token", cwd: ctx.cwd, owner: "old-owner", createdAt: 1, pid: 1, runId: "run-old", asyncDir };
+		const guard = await beginGuardedSpawn({
+			rpc, writerCoordinator: coordinator as never, cwd: ctx.cwd, owner: "w", writeCapable: true, label: "Test",
+		});
+		assert.deepEqual(coordinator.released, ["old-token"]);
+		assert.equal(guard.lease?.token, "token-1");
+		assert.equal(rpc.calls[0]?.method, "status");
+		assert.deepEqual(rpc.calls[0]?.params, { id: "run-old" });
+		assert.equal(rpc.calls[1]?.method, "ping");
+	} finally {
+		fs.rmSync(asyncDir, { recursive: true, force: true });
+	}
 });
 
 test("an active or unverifiable blocking lease keeps the conflict error", async () => {
-	for (const statusText of ["State: running", "State: mysterious"]) {
+	for (const statusText of ["State: running", "State: mysterious", "State: failed"]) {
 		const rpc = new FakeRpc((method) => method === "status" ? reply({ data: { text: statusText } }) : reply());
 		const coordinator = new FakeCoordinator();
 		coordinator.acquireFailures = [new Error("Engineering write lock: busy")];

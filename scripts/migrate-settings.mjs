@@ -24,11 +24,68 @@ const REMOVED_AGENT_OVERRIDES = new Set([
 	"pi-workbench.teams-scout",
 	"pi-workbench.teams-teammate",
 ]);
+const KNOWN_DEFAULT_FALLBACK_MODELS = {
+	"pi-workbench.planner": [
+		["openai-codex/gpt-5.6-terra"],
+	],
+	"pi-workbench.worker": [
+		["openai-codex/gpt-5.6-sol", "kimi-coding/k3"],
+		["openai-codex/gpt-5.6-sol:high", "kimi-coding/k3:high"],
+		["kimi-coding/k3:high"],
+	],
+	"pi-workbench.reviewer": [
+		["kimi-coding/k3", "google-vertex/gemini-3.6-flash"],
+		["kimi-coding/k3:high", "google-vertex/gemini-3.6-flash:low"],
+		["openai-codex/gpt-5.5:high"],
+	],
+};
+const KNOWN_DEFAULT_PRIMARY_MODELS = {
+	"pi-workbench.planner": "openai-codex/gpt-5.6-sol",
+	"pi-workbench.worker": "openai-codex/gpt-5.6-terra",
+	"pi-workbench.reviewer": "openai-codex/gpt-5.6-sol",
+};
 
 function removeObsoleteAgentOverrides(overrides) {
 	return Object.fromEntries(Object.entries(overrides).filter(([key]) => (
 		!REMOVED_AGENT_OVERRIDES.has(key) && !key.startsWith("pi-shipyard.")
 	)));
+}
+
+function sameStrings(left, right) {
+	return Array.isArray(left)
+		&& Array.isArray(right)
+		&& left.length === right.length
+		&& left.every((value, index) => value === right[index]);
+}
+
+/** Preserve every existing override except exact primary/fallback combinations
+ * shipped by older Pi Engineering profiles and their known xhigh reasoning.
+ * Customized fleets, reasoning choices, and every other field stay put. */
+function mergeAgentOverrides(profileOverrides, existingOverrides) {
+	const recommended = removeObsoleteAgentOverrides(profileOverrides);
+	const existing = removeObsoleteAgentOverrides(existingOverrides);
+	const merged = { ...recommended, ...existing };
+	for (const [agent, knownDefaultFallbacks] of Object.entries(KNOWN_DEFAULT_FALLBACK_MODELS)) {
+		const current = existing[agent];
+		const next = recommended[agent];
+		if (
+			current && typeof current === "object" && !Array.isArray(current)
+			&& next && typeof next === "object" && !Array.isArray(next)
+			&& current.model === KNOWN_DEFAULT_PRIMARY_MODELS[agent]
+			&& knownDefaultFallbacks.some((fallbacks) => sameStrings(current.fallbackModels, fallbacks))
+			&& Array.isArray(next.fallbackModels)
+		) {
+			merged[agent] = {
+				...current,
+				fallbackModels: [...next.fallbackModels],
+				...(current.thinking === "xhigh"
+					&& typeof next.thinking === "string"
+					? { thinking: next.thinking }
+					: {}),
+			};
+		}
+	}
+	return merged;
 }
 
 export function sha256(value) {
@@ -107,10 +164,7 @@ export function buildMigratedSettings(settings, profileOverrides = loadProfile()
 		packages,
 		subagents: {
 			...existingSubagents,
-			agentOverrides: {
-				...removeObsoleteAgentOverrides(profileOverrides),
-				...removeObsoleteAgentOverrides(existingOverrides),
-			},
+			agentOverrides: mergeAgentOverrides(profileOverrides, existingOverrides),
 		},
 	};
 }

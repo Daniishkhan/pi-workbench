@@ -1,16 +1,20 @@
 {
   "name": "audit",
   "package": "pi-workbench",
-  "description": "Three-agent read-only audit with independent review angles and compact synthesis.",
+  "description": "Three-agent read-only audit with functional and non-functional/security review passes plus compact synthesis.",
   "chain": [
     {
       "phase": "Independent review",
       "parallel": [
         {
           "agent": "pi-workbench.reviewer",
-          "label": "Correctness and runtime",
+          "label": "Functional correctness and validation",
           "as": "correctness",
-          "task": "Audit this target for correctness and runtime defects: {task}\n\nInspect repository instructions, the relevant diff, source, callers, tests, configuration, and error/cleanup/concurrency paths. Scope and refine broad or truncated searches. Trace every changed cross-boundary value through its real consumer or dispatcher, including code outside the diff, and check the owning test. If a pi-workbench-feature-ledger is referenced, open it and the sources named by its Spec baseline, then check the named stable task, milestone, or review gate for specification traceability, acceptance, correctness, integration, and runtime behavior. Verify that work-plan status, Evidence, and Handoff match reality. Where applicable, verify compatibility, migrations, deployment or ordering assumptions, rollback, cleanup, and failure recovery. Report only actionable defects introduced or exposed by this scope and tied to the governing contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files. Finish with the required structured envelope: READY requires no findings; NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
+          "acceptance": {
+            "level": "none",
+            "reason": "Review completion is enforced by the workflow receipt contract."
+          },
+          "task": "Audit this target for correctness and runtime defects: {task}\n\nInspect repository instructions, the relevant diff, source, callers, tests, configuration, and error/cleanup/concurrency paths. Scope and refine broad or truncated searches. Trace every changed cross-boundary value through its real consumer or dispatcher, including code outside the diff, and check the owning test. If a pi-workbench-feature-ledger is referenced, open it and the sources named by its Spec baseline, then check the named stable task, milestone, or review gate for specification traceability, acceptance, correctness, integration, and runtime behavior. Verify that work-plan status, Evidence, and Handoff match reality. Where applicable, verify compatibility, migrations, deployment or ordering assumptions, rollback, cleanup, and failure recovery. Use VERIFIED only for evidence you independently established from accessible artifacts; use REPORTED for a command outcome or other evidence supplied by the target or handoff that you could not independently establish. Report only actionable defects introduced or exposed by this scope and tied to the governing contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files. Finish with the required structured envelope: READY requires no findings; NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
           "outputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -33,9 +37,10 @@
             ],
             "properties": {
               "verdict": { "type": "string", "enum": ["READY", "NOT_READY"] },
-              "summary": { "type": "string", "minLength": 1 },
+              "summary": { "type": "string", "minLength": 1, "maxLength": 1200 },
               "findings": {
                 "type": "array",
+                "maxItems": 12,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -43,7 +48,7 @@
                   "properties": {
                     "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "path": { "type": "string", "minLength": 1 },
+                    "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
                     "line": {
                       "type": "object",
                       "additionalProperties": false,
@@ -53,37 +58,38 @@
                         "end": { "type": "integer", "minimum": 1 }
                       }
                     },
-                    "violatedContract": { "type": "string", "minLength": 1 },
-                    "scenario": { "type": "string", "minLength": 1 },
-                    "safeFix": { "type": "string", "minLength": 1 },
-                    "validation": { "type": "string", "minLength": 1 }
+                    "violatedContract": { "type": "string", "minLength": 1, "maxLength": 800 },
+                    "scenario": { "type": "string", "minLength": 1, "maxLength": 800 },
+                    "safeFix": { "type": "string", "minLength": 1, "maxLength": 800 },
+                    "validation": { "type": "string", "minLength": 1, "maxLength": 800 }
                   }
                 }
               },
               "validationEvidence": {
                 "type": "array",
+                "maxItems": 16,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
                   "required": ["check", "status", "evidence"],
                   "properties": {
-                    "check": { "type": "string", "minLength": 1 },
-                    "status": { "type": "string", "enum": ["VERIFIED", "MISSING", "STALE", "NOT_APPLICABLE"] },
-                    "evidence": { "type": "string", "minLength": 1 }
+                    "check": { "type": "string", "minLength": 1, "maxLength": 256 },
+                    "status": { "type": "string", "enum": ["VERIFIED", "REPORTED", "MISSING", "STALE", "NOT_APPLICABLE"] },
+                    "evidence": { "type": "string", "minLength": 1, "maxLength": 800 }
                   }
                 }
               },
-              "residualRisks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "residualRisks": { "type": "array", "maxItems": 12, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
               "ledgerDisposition": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["artifactPath", "gateId", "result", "evidenceSummary", "requiredNextState"],
                 "properties": {
-                  "artifactPath": { "type": "string", "minLength": 1 },
-                  "gateId": { "type": "string", "minLength": 1 },
+                  "artifactPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                  "gateId": { "type": "string", "minLength": 1, "maxLength": 160 },
                   "result": { "type": "string", "enum": ["READY", "NOT_READY"] },
-                  "evidenceSummary": { "type": "string", "minLength": 1 },
-                  "requiredNextState": { "type": "string", "minLength": 1 }
+                  "evidenceSummary": { "type": "string", "minLength": 1, "maxLength": 1200 },
+                  "requiredNextState": { "type": "string", "minLength": 1, "maxLength": 800 }
                 }
               }
             }
@@ -91,10 +97,14 @@
           "progress": false
         },
         {
-          "agent": "pi-workbench.reviewer",
-          "label": "Tests, simplicity, and applicable security",
+          "agent": "pi-workbench.risk-reviewer",
+          "label": "Non-functional and security risk",
           "as": "quality",
-          "task": "Independently audit this target for tests, simplicity, and applicable security: {task}\n\nLook for missing regression or characterization coverage, unnecessary complexity, brittle integration seams, and security issues only where the change exposes a real trust boundary. Scope and refine broad or truncated searches. Trace changed cross-boundary values through their real consumers or dispatchers and check owning tests. If a pi-workbench-feature-ledger is referenced, open it and the sources named by its Spec baseline, then check the named stable task, milestone, or review gate for acceptance coverage, tests, simplicity, maintainability, and applicable security. Verify that work-plan status, Evidence, and Handoff match reality. Inspect the actual diff, source, tests, documentation, changelog or migration notes, configuration, and operational checks where release scope requires them. Report only actionable defects or material validation gaps introduced or exposed by this scope and tied to the governing contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files. Finish with the required structured envelope: READY requires no findings; NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
+          "acceptance": {
+            "level": "none",
+            "reason": "Review completion is enforced by the workflow receipt contract."
+          },
+          "task": "Independently audit this target for non-functional and security risk: {task}\n\nInspect the actual diff, source, real consumers, tests, configuration, documentation, changelog or migration notes, and operational checks where the release scope requires them. First identify the applicable risk surfaces; check security only where the change exposes a real trust boundary. Examine failure safety and recovery, concurrency and cleanup, resource limits and material performance, compatibility, migrations, deployment ordering, rollback, observability, and maintainability where they can cause a concrete operational defect. Scope and refine broad or truncated searches. Trace changed cross-boundary values through their real consumers or dispatchers and check owning tests or the strongest applicable validator. If a pi-workbench-feature-ledger is referenced, open it and the sources named by its Spec baseline, then check the named stable task, milestone, or review gate for acceptance coverage and applicable non-functional or security invariants. Verify that work-plan status, Evidence, and Handoff match reality. Use VERIFIED only for evidence you independently established from accessible artifacts; use REPORTED for a command outcome or other evidence supplied by the target or handoff that you could not independently establish. Report only actionable defects or material validation gaps introduced or exposed by this scope and tied to the governing contract; reject unrelated issues, speculation, generic hardening, preferences, and duplicate symptoms. Do not edit files. Finish with the required structured envelope: READY requires no findings; NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
           "outputSchema": {
             "type": "object",
             "additionalProperties": false,
@@ -117,9 +127,10 @@
             ],
             "properties": {
               "verdict": { "type": "string", "enum": ["READY", "NOT_READY"] },
-              "summary": { "type": "string", "minLength": 1 },
+              "summary": { "type": "string", "minLength": 1, "maxLength": 1200 },
               "findings": {
                 "type": "array",
+                "maxItems": 12,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
@@ -127,7 +138,7 @@
                   "properties": {
                     "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
                     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "path": { "type": "string", "minLength": 1 },
+                    "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
                     "line": {
                       "type": "object",
                       "additionalProperties": false,
@@ -137,37 +148,38 @@
                         "end": { "type": "integer", "minimum": 1 }
                       }
                     },
-                    "violatedContract": { "type": "string", "minLength": 1 },
-                    "scenario": { "type": "string", "minLength": 1 },
-                    "safeFix": { "type": "string", "minLength": 1 },
-                    "validation": { "type": "string", "minLength": 1 }
+                    "violatedContract": { "type": "string", "minLength": 1, "maxLength": 800 },
+                    "scenario": { "type": "string", "minLength": 1, "maxLength": 800 },
+                    "safeFix": { "type": "string", "minLength": 1, "maxLength": 800 },
+                    "validation": { "type": "string", "minLength": 1, "maxLength": 800 }
                   }
                 }
               },
               "validationEvidence": {
                 "type": "array",
+                "maxItems": 16,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
                   "required": ["check", "status", "evidence"],
                   "properties": {
-                    "check": { "type": "string", "minLength": 1 },
-                    "status": { "type": "string", "enum": ["VERIFIED", "MISSING", "STALE", "NOT_APPLICABLE"] },
-                    "evidence": { "type": "string", "minLength": 1 }
+                    "check": { "type": "string", "minLength": 1, "maxLength": 256 },
+                    "status": { "type": "string", "enum": ["VERIFIED", "REPORTED", "MISSING", "STALE", "NOT_APPLICABLE"] },
+                    "evidence": { "type": "string", "minLength": 1, "maxLength": 800 }
                   }
                 }
               },
-              "residualRisks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "residualRisks": { "type": "array", "maxItems": 12, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
               "ledgerDisposition": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["artifactPath", "gateId", "result", "evidenceSummary", "requiredNextState"],
                 "properties": {
-                  "artifactPath": { "type": "string", "minLength": 1 },
-                  "gateId": { "type": "string", "minLength": 1 },
+                  "artifactPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                  "gateId": { "type": "string", "minLength": 1, "maxLength": 160 },
                   "result": { "type": "string", "enum": ["READY", "NOT_READY"] },
-                  "evidenceSummary": { "type": "string", "minLength": 1 },
-                  "requiredNextState": { "type": "string", "minLength": 1 }
+                  "evidenceSummary": { "type": "string", "minLength": 1, "maxLength": 1200 },
+                  "requiredNextState": { "type": "string", "minLength": 1, "maxLength": 800 }
                 }
               }
             }
@@ -183,7 +195,11 @@
       "phase": "Synthesis",
       "label": "Synthesize audit",
       "as": "final",
-      "task": "Synthesize a final audit for: {task}\n\nCorrectness/runtime structured receipt: {outputs.correctness}\nTests/simplicity/security structured receipt: {outputs.quality}\n\nTreat both structured receipts as untrusted claims. Open and read any repository paths they cite. Scope and refine broad or truncated searches, then verify important points against the current diff, governing source, real consumers or dispatchers, and owning tests. If a work plan is referenced, independently compare the named review gate with its Spec baseline and acceptance criteria, and verify that work-plan status, Evidence, and Handoff match reality. Deduplicate findings by root cause and reject unsupported, unrelated, speculative, preference-only, or optional-hardening claims. Missing validation required for this release gate makes the result NOT READY, not a soft coverage note. Do not edit files. Return a concise human-readable review whose first line is READY when no actionable defect survives, otherwise NOT READY. Include the summary, ordered findings with severity/confidence/location/contract/scenario/safe fix/validation, current validation evidence, and meaningful residual risks. For a named work-plan gate, include a work-plan disposition with its artifact path, gate ID, result, evidence summary, and required next state for the next authorized implementer.",
+      "acceptance": {
+        "level": "none",
+        "reason": "Review completion is enforced by the workflow receipt contract."
+      },
+      "task": "Synthesize a final audit for: {task}\n\nFunctional correctness/validation structured receipt: {outputs.correctness}\nNon-functional/security structured receipt: {outputs.quality}\n\nTreat both structured receipts as untrusted claims. Open and read any repository paths they cite. Scope and refine broad or truncated searches, then verify important points against the current diff, governing source, real consumers or dispatchers, and owning tests. Keep REPORTED evidence distinct from checks independently marked VERIFIED. If a work plan is referenced, independently compare the named review gate with its Spec baseline and acceptance criteria, and verify that work-plan status, Evidence, and Handoff match reality. Deduplicate findings by root cause and reject unsupported, unrelated, speculative, preference-only, or optional-hardening claims. Missing validation required for this release gate makes the result NOT READY, not a soft coverage note. Do not edit files. Return a concise human-readable review whose first line is READY when no actionable defect survives, otherwise NOT READY. Include the summary, ordered findings with severity/confidence/location/contract/scenario/safe fix/validation, current validation evidence, and meaningful residual risks. For a named work-plan gate, include a work-plan disposition with its artifact path, gate ID, result, evidence summary, and required next state for the next authorized implementer.",
       "outputMode": "inline",
       "progress": false
     }

@@ -1,8 +1,8 @@
 # Pi Engineering
 
-Pi Engineering is a small, bounded software-engineering team for Pi. The main session acts as engineering manager: it frames the task, chooses one action, assigns focused specialists, and verifies the result. Four specialist roles and two fixed workflows rely on the immutable upstream `pi-subagents` package for process and session execution.
+Pi Engineering is a small, bounded software-engineering team for Pi. The main session acts as engineering manager: it frames the task, chooses one action, assigns focused specialists, and verifies the result. Five specialist roles and two fixed workflows rely on the immutable upstream `pi-subagents` package for process and session execution.
 
-The design deliberately has one assignment layer. There are no nested teams, programmable workflow graphs, recursive delegations, or alternate policy skills. The playbook changes the method—not the team size—so a documentation edit, a causal bug investigation, and a release audit do not receive the same ceremony.
+The design deliberately has one assignment layer. There are no nested teams, user-programmable workflow graphs, recursive delegations, or alternate policy skills. The playbook changes the method—not the team size—so a documentation edit, a causal bug investigation, and a release audit do not receive the same ceremony.
 
 ## Execution model
 
@@ -12,8 +12,8 @@ The design deliberately has one assignment layer. There are no nested teams, pro
   ├─ plan      → one read-only planner
   ├─ implement → one write-locked implementer
   ├─ review    → one fresh read-only reviewer
-  ├─ deliver   → fixed plan/write/review workflow
-  └─ audit     → fixed read-only audit workflow
+  ├─ deliver   → plan/write/dual-review; one critical repair when required
+  └─ audit     → two-model read-only audit and synthesis
                        │
              pinned pi-subagents runtime
 ```
@@ -51,12 +51,14 @@ Humans use `/engineering` or its `/eng` shorthand:
 /engineering plan <approved problem>
 /engineering implement <approved task>
 /engineering review <change or target>
-/engineering deliver <approved end-to-end task>
-/engineering audit <release-critical target>
+/engineering deliver Artifact: plans/feature.md; Task: T1
+/engineering audit Artifact: plans/feature.md; Gate: G1
 /engineering --deep review <large or unusually difficult target>
 ```
 
-Models call `assign_engineering` with the same seven actions and the standard effort profile. Selection is explicit; there is no keyword router, and the model-facing tool cannot silently escalate itself to deep effort. Humans may place `--quick`, `--standard`, or `--deep` immediately before or after an action.
+Models call `assign_engineering` with the same seven actions and the standard effort profile. Selection is explicit; there is no keyword router, free-form model override, or silent escalation to deep effort. Model and thinking selection remains in profiles/settings. Humans may place `--quick`, `--standard`, or `--deep` immediately before or after an action.
+
+Model-launched `plan` and `implement`, plus every `deliver` and `audit`, start fresh contexts. Their task must therefore use `Objective:`, `Scope:`, `Constraints:`, and `Done when:` fields, or `Artifact: <path>` with a stable `Task:`, `Milestone:`, or `Gate:` ID. Semicolon-separated fields work in one-line slash commands. Inline briefs are capped at 8 KiB; longer specifications belong in a repository artifact. Referential assignments such as “all the above fixes” are not valid fresh-context handoffs.
 
 | Action | Specialist | Capability | Hard runtime | Turn budget |
 |---|---|---:|---:|---:|
@@ -65,7 +67,7 @@ Models call `assign_engineering` with the same seven actions and the standard ef
 | `plan` | Planner | Read-only | 15 minutes | 18 + 2 grace |
 | `implement` | Implementer | Writer | 45 minutes | Runtime bound only |
 | `review` | Reviewer | Read-only | 15 minutes | 18 + 2 grace |
-| `deliver` | Fixed delivery chain | One implementer | 45 minutes | Runtime bound only |
+| `deliver` | Fixed delivery chain | One implementer at a time | 60 minutes | Runtime bound only |
 | `audit` | Fixed audit chain | Read-only | 20 minutes | Runtime bound only |
 
 These are the `standard` ceilings. `quick` selects a smaller ceiling for routine work. Human-selected `deep` permits two-hour inspection, planning, and review; four-hour implementation and delivery; and three-hour audit. Deep work has a wall-clock ceiling but no conversational turn cutoff. Effort changes only time available to the selected topology—it never adds agents, workflow phases, or authority.
@@ -85,9 +87,11 @@ The single `pi-engineering` skill selects the lightest safe action or short acti
 
 The method is evidence-scaled. Stable behavior changes and bugs prefer a focused regression or contract test that demonstrably fails before the fix. Risky behavior-preserving refactors use characterization coverage. Prose, generated output, and mechanical configuration use their strongest relevant validators instead of synthetic tests. Every completion claim requires fresh validation after the last mutation and inspection of the current diff.
 
-Pi Engineering does not automatically execute an open-ended plan task by task or start review/fix retry loops. Each writing action owns one coherent approved scope and returns within its hard runtime. For substantial work, the engineering manager can obtain plan approval and assign one bounded implementation slice explicitly.
+Pi Engineering does not automatically execute an open-ended plan task by task or start review/fix retry loops. Each writing action owns one coherent approved scope and returns within its hard runtime. An authorized `deliver` may make one conditional P0/P1 repair and re-review it once inside the same write-locked run; no other severity triggers automatic mutation, and the workflow cannot repeat that repair. For substantial work, the engineering manager can obtain plan approval and assign one bounded implementation slice explicitly.
 
-The operating rule is to choose the action before its effort. A local fix normally needs one implementer even if the investigation is difficult. Broad research may justify a deep inspector or a few explicitly partitioned read-only questions. Two independent reviewers plus synthesis are reserved for an audit or named review gate, not routine edits.
+An async `deliver` or `audit` completion wakes the manager to report the result, not to launch more recovery. The in-memory assignment boundary blocks another model-initiated engineering action until direct user input, submitted Plannotator feedback, or an explicit non-status `/engineering` command authorizes the next phase. This applies equally to success, failure, and `NOT READY`; it does not shorten or interrupt the active run.
+
+The operating rule is to choose the action before its effort. A local low-risk fix normally uses `implement`, even if the investigation was difficult. `deliver` pays for independent functional and non-functional/security review only when an end-to-end guarded change is warranted. `audit` provides the same two-model separation without write authority for a release or named review gate.
 
 Use the smallest action that can finish the work:
 
@@ -98,7 +102,13 @@ Use the smallest action that can finish the work:
 - `deliver` is the normal end-to-end path when planning, one implementation owner, and fresh review all add value.
 - `audit` is the explicit release-critical read-only path. It is not a routine precondition for implementation.
 
-`deliver` and `audit` are static package chains, not user-programmable graphs. They do not branch into teams, retry meshes, or nested workflows.
+`deliver` is a closed planner → worker → two independent review angles → synthesis path. A validated synthesis containing P0/P1 creates one repair batch, one worker, and one post-repair review; P2/P3-only or `READY` results skip both conditional steps. The run then stops regardless of the final verdict. `audit` remains two independent reviewers plus synthesis. Neither workflow permits user-programmable topology, nested workflows, or retry meshes.
+
+## Automatic final reports
+
+Every terminal `deliver` and `audit` report is sent to Plannotator through its public extension event API when Plannotator is installed. `READY` opens as a visual receipt; `NOT READY`, malformed output, and runtime failure open with an attention gate. Transient status updates never open a browser. The normal inline completion remains the unconditional fallback, so missing or unavailable Plannotator support cannot fail a workflow. Approve and Close acknowledge the report; they do not authorize another mutation. Submitted annotations are treated as direct human feedback and return control to the manager.
+
+Structured review and decision receipts cap finding counts, evidence entries, risks, paths, and narrative lengths before later steps interpolate them. This keeps a verbose reviewer from multiplying context across synthesis, repair, and terminal re-review.
 
 ## Large features and durable handoffs
 
@@ -119,14 +129,15 @@ The specialists intentionally keep skill inheritance disabled. The work-plan pat
 
 ## Roles and models
 
-The package contains exactly four model-agnostic specialists: inspector, planner, implementer, and reviewer. Their stable internal IDs preserve existing model overrides:
+The package contains exactly five model-agnostic specialists: inspector, planner, implementer, functional reviewer, and workflow-only non-functional/security reviewer. Their stable internal IDs preserve existing model overrides:
 
 - `pi-workbench.fast-scout`
 - `pi-workbench.planner`
 - `pi-workbench.worker`
 - `pi-workbench.reviewer`
+- `pi-workbench.risk-reviewer`
 
-Recommended model, fallback, and thinking assignments live in `profiles/recommended-agent-overrides.json`. Change those settings without editing role prompts.
+Recommended model, fallback, and thinking assignments live in `profiles/recommended-agent-overrides.json`. The worker, functional reviewer, and risk reviewer use pairwise-disjoint primary/fallback pools, so a provider fallback cannot silently collapse implementation and both review angles onto one model. Change those settings without editing role prompts, and preserve that separation.
 
 ## Configuration
 
@@ -158,13 +169,13 @@ Write locks use the stable compatibility directory:
 ~/.pi/agent/workbench/writer-leases/
 ```
 
-Inspect them with `/engineering status`. Inspect a retained upstream run with `/engineering status <run-id>`. `/engineering unlock` is an interactive recovery operation, not an engineering action; use it only after confirming the recorded implementer is no longer active.
+Inspect them with `/engineering status`, which also appends the shared upstream runtime inventory. Inspect a retained run with `/engineering status <run-id>`. `/engineering unlock` is an interactive, token-checked recovery operation; use it only after confirming the recorded implementer is no longer active. A stopped or failed runtime label does not release the lease until its durable terminal artifact confirms that the writer exited.
 
 The lock applies to Pi Engineering-managed assignments, not unrelated extension tools called directly.
 
 ## Repository inspection
 
-Pi Engineering registers `inspect_repo`, a read-only repository inspection tool shared by its four specialists. Mutation remains confined to the implementer's normal editing surface. Intermediate workflow receipts use upstream run-scoped storage under `.pi-subagents/`; Pi Engineering adds no custom run database, runtime findings store, context cache, team mailbox, or dynamic workflow store. An optional work plan is ordinary project Markdown and remains portable without Pi Engineering.
+Pi Engineering registers `inspect_repo`, a read-only repository inspection tool shared by its five specialists. It resolves the canonical worktree root, supports a combined HEAD-to-worktree diff, and uses compact three-line diff context by default with a bounded override. Mutation remains confined to the implementer's normal editing surface. Intermediate workflow receipts use upstream run-scoped storage under `.pi-subagents/`; Pi Engineering adds no custom run database, runtime findings store, context cache, team mailbox, or workflow state store. An optional work plan is ordinary project Markdown and remains portable without Pi Engineering.
 
 ## Validation
 

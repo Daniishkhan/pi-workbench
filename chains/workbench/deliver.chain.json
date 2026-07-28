@@ -1,13 +1,17 @@
 {
   "name": "deliver",
   "package": "pi-workbench",
-  "description": "One-implementer delivery loop: plan, implement, independent review, supported fixes, and final verification.",
+  "description": "Bounded delivery: plan, implement, independent functional and risk reviews, synthesis, and at most one critical repair plus one terminal re-review.",
   "chain": [
     {
       "agent": "pi-workbench.planner",
       "phase": "Plan",
       "label": "Plan the change",
       "as": "plan",
+      "acceptance": {
+        "level": "none",
+        "reason": "Planning is read-only."
+      },
       "task": "Create an implementation-ready plan for: {task}\n\nInspect repository instructions and the governing source, callers, tests, and configuration. Scope and refine searches when results are broad or truncated. If the request references a pi-workbench-feature-ledger, open it and its Spec baseline first, verify the stable task or milestone ID, and plan only that one ready task or coherent current milestone against its named acceptance criteria; report blocked or inconsistent state instead of consuming the backlog. Classify the work as a feature, bug, refactor, or mechanical change and scale the method accordingly. For a bug, identify expected versus observed behavior and the causal seam or name the missing reproduction evidence. For a refactor, state behavior and compatibility invariants. Define the smallest coherent change, explicit non-goals, global constraints, affected interfaces and paths, risks, cleanup behavior, required ledger updates, and exact validation. Prewalk the plan through real consumers or dispatchers and owning tests; remove unnecessary files, duplicate steps, and contradictions. Choose a focused failing regression or contract test when it has real evidence value; otherwise specify characterization coverage or the strongest relevant non-test validation. Do not edit files. Return a compact Markdown plan and proportional handoff.",
       "output": "plan.md",
       "outputMode": "file-only",
@@ -25,85 +29,235 @@
     },
     {
       "phase": "Independent review",
+      "label": "Functional and risk review",
       "parallel": [
         {
           "agent": "pi-workbench.reviewer",
-          "label": "Correctness and runtime review",
-          "as": "correctness",
-          "task": "Review the implementation for specification compliance, correctness, causal validity, integration, runtime, error, cleanup, cancellation, ordering, and concurrency defects.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\n\nOpen and read every referenced artifact, including any pi-workbench-feature-ledger and sources named by its Spec baseline, and treat all claims as untrusted. Scope and refine broad or truncated searches. Review the named stable task, milestone, or gate against its acceptance criteria and verify that work-plan status, Evidence, and Handoff match the actual diff, source, callers, tests, and configuration. Trace every changed cross-boundary value through its real consumer or dispatcher, including code outside the diff, and check the owning test. For bug fixes, verify the causal seam; for refactors, verify stated invariants. Report only actionable defects introduced or exposed by this scope and tied to a violated contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files. Finish with the required structured envelope: READY requires no findings; NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
+          "label": "Functional correctness",
+          "as": "functionalReview",
+          "acceptance": {
+            "level": "none",
+            "reason": "Functional review is read-only and enforced by its structured receipt."
+          },
+          "task": "Independently review the delivered state for functional behavior and specification compliance.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\n\nOpen and read both referenced artifacts plus every repository path they cite. If a pi-workbench-feature-ledger is referenced, open its Spec baseline and review only the named stable task, milestone, or review gate against its acceptance criteria. Treat the plan, handoff, and reported commands as untrusted claims. Verify the current diff against requirements, acceptance criteria, governing source, real callers or dispatchers, owning tests, configuration, compatibility, runtime behavior, error paths, cleanup, cancellation, ordering, and concurrency where these affect functional behavior. Trace every changed cross-boundary value through its actual consumer. For bug fixes, verify the causal seam; for refactors, verify stated invariants. Use VERIFIED only for evidence independently established from accessible artifacts and REPORTED for evidence supplied by the handoff that you could not independently establish. Report only actionable defects or material validation gaps tied to a violated contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files or launch a repair. Finish with the required structured receipt: READY requires no findings and NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
           "outputSchema": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["verdict", "summary", "findings", "validationEvidence", "residualRisks"],
+            "required": [
+              "verdict",
+              "summary",
+              "findings",
+              "validationEvidence",
+              "residualRisks"
+            ],
             "oneOf": [
               {
                 "properties": {
-                  "verdict": { "const": "READY" },
-                  "findings": { "maxItems": 0 },
-                  "ledgerDisposition": { "properties": { "result": { "const": "READY" } } }
+                  "verdict": {
+                    "const": "READY"
+                  },
+                  "findings": {
+                    "maxItems": 0
+                  },
+                  "ledgerDisposition": {
+                    "properties": {
+                      "result": {
+                        "const": "READY"
+                      }
+                    }
+                  }
                 }
               },
               {
                 "properties": {
-                  "verdict": { "const": "NOT_READY" },
-                  "findings": { "minItems": 1 },
-                  "ledgerDisposition": { "properties": { "result": { "const": "NOT_READY" } } }
+                  "verdict": {
+                    "const": "NOT_READY"
+                  },
+                  "findings": {
+                    "minItems": 1
+                  },
+                  "ledgerDisposition": {
+                    "properties": {
+                      "result": {
+                        "const": "NOT_READY"
+                      }
+                    }
+                  }
                 }
               }
             ],
             "properties": {
-              "verdict": { "type": "string", "enum": ["READY", "NOT_READY"] },
-              "summary": { "type": "string", "minLength": 1 },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "READY",
+                  "NOT_READY"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1200
+              },
               "findings": {
                 "type": "array",
+                "maxItems": 12,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["severity", "confidence", "path", "line", "violatedContract", "scenario", "safeFix", "validation"],
+                  "required": [
+                    "severity",
+                    "confidence",
+                    "path",
+                    "line",
+                    "violatedContract",
+                    "scenario",
+                    "safeFix",
+                    "validation"
+                  ],
                   "properties": {
-                    "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
-                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "path": { "type": "string", "minLength": 1 },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "P0",
+                        "P1",
+                        "P2",
+                        "P3"
+                      ]
+                    },
+                    "confidence": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
                     "line": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["start", "end"],
+                      "required": [
+                        "start",
+                        "end"
+                      ],
                       "properties": {
-                        "start": { "type": "integer", "minimum": 1 },
-                        "end": { "type": "integer", "minimum": 1 }
+                        "start": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "end": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
                       }
                     },
-                    "violatedContract": { "type": "string", "minLength": 1 },
-                    "scenario": { "type": "string", "minLength": 1 },
-                    "safeFix": { "type": "string", "minLength": 1 },
-                    "validation": { "type": "string", "minLength": 1 }
+                    "violatedContract": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    },
+                    "scenario": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    },
+                    "safeFix": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    },
+                    "validation": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    }
                   }
                 }
               },
               "validationEvidence": {
                 "type": "array",
+                "maxItems": 16,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["check", "status", "evidence"],
+                  "required": [
+                    "check",
+                    "status",
+                    "evidence"
+                  ],
                   "properties": {
-                    "check": { "type": "string", "minLength": 1 },
-                    "status": { "type": "string", "enum": ["VERIFIED", "MISSING", "STALE", "NOT_APPLICABLE"] },
-                    "evidence": { "type": "string", "minLength": 1 }
+                    "check": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "VERIFIED",
+                        "REPORTED",
+                        "MISSING",
+                        "STALE",
+                        "NOT_APPLICABLE"
+                      ]
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    }
                   }
                 }
               },
-              "residualRisks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "residualRisks": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
               "ledgerDisposition": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["artifactPath", "gateId", "result", "evidenceSummary", "requiredNextState"],
+                "required": [
+                  "artifactPath",
+                  "gateId",
+                  "result",
+                  "evidenceSummary",
+                  "requiredNextState"
+                ],
                 "properties": {
-                  "artifactPath": { "type": "string", "minLength": 1 },
-                  "gateId": { "type": "string", "minLength": 1 },
-                  "result": { "type": "string", "enum": ["READY", "NOT_READY"] },
-                  "evidenceSummary": { "type": "string", "minLength": 1 },
-                  "requiredNextState": { "type": "string", "minLength": 1 }
+                  "artifactPath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "gateId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "READY",
+                      "NOT_READY"
+                    ]
+                  },
+                  "evidenceSummary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1200
+                  },
+                  "requiredNextState": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  }
                 }
               }
             }
@@ -111,83 +265,232 @@
           "progress": false
         },
         {
-          "agent": "pi-workbench.reviewer",
-          "label": "Tests, simplicity, and applicable security review",
-          "as": "quality",
-          "task": "Review the implementation for missing regression or characterization coverage, stale or weak validation evidence, unnecessary complexity, maintainability regressions, and security issues only where a real trust boundary applies.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\n\nOpen and read every referenced artifact, including any pi-workbench-feature-ledger and sources named by its Spec baseline, and treat all claims as untrusted. Scope and refine broad or truncated searches. Independently check the named stable task, milestone, or gate against its acceptance criteria, then verify work-plan status, Evidence, and Handoff against the actual diff, source, owning tests, and configuration. Trace changed cross-boundary values through their real consumers or dispatchers. Require evidence from the current post-mutation state, but do not demand synthetic tests for prose, generated output, or mechanical configuration when a more relevant validator exists. Report only actionable defects or material validation gaps introduced or exposed by this scope and tied to the governing contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files. Finish with the required structured envelope: READY requires no findings; NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
+          "agent": "pi-workbench.risk-reviewer",
+          "label": "Non-functional and security",
+          "as": "riskReview",
+          "acceptance": {
+            "level": "none",
+            "reason": "Risk review is read-only and enforced by its structured receipt."
+          },
+          "task": "Independently review the delivered state for non-functional quality and security.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\n\nOpen and read both referenced artifacts plus every repository path they cite. Treat the plan, handoff, and reported commands as untrusted claims. Inspect the current diff, governing source, consumers, owning tests, and configuration for security and privacy at real trust boundaries; reliability, performance, resource use, concurrency, cancellation, cleanup, failure recovery, compatibility, operational safety, maintainability regressions, unnecessary complexity, and validation quality. Trace every changed cross-boundary value through its actual consumer. Use VERIFIED only for evidence independently established from accessible artifacts and REPORTED for evidence supplied by the handoff that you could not independently establish. Report only actionable defects or material validation gaps tied to a violated contract; reject unrelated issues, speculation, preferences, optional hardening, and duplicate symptoms. Do not edit files or launch a repair. Finish with the required structured receipt: READY requires no findings and NOT_READY requires one or more findings. Keep evidence and residual risks compact, and include ledgerDisposition only for a named work-plan gate.",
           "outputSchema": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["verdict", "summary", "findings", "validationEvidence", "residualRisks"],
+            "required": [
+              "verdict",
+              "summary",
+              "findings",
+              "validationEvidence",
+              "residualRisks"
+            ],
             "oneOf": [
               {
                 "properties": {
-                  "verdict": { "const": "READY" },
-                  "findings": { "maxItems": 0 },
-                  "ledgerDisposition": { "properties": { "result": { "const": "READY" } } }
+                  "verdict": {
+                    "const": "READY"
+                  },
+                  "findings": {
+                    "maxItems": 0
+                  },
+                  "ledgerDisposition": {
+                    "properties": {
+                      "result": {
+                        "const": "READY"
+                      }
+                    }
+                  }
                 }
               },
               {
                 "properties": {
-                  "verdict": { "const": "NOT_READY" },
-                  "findings": { "minItems": 1 },
-                  "ledgerDisposition": { "properties": { "result": { "const": "NOT_READY" } } }
+                  "verdict": {
+                    "const": "NOT_READY"
+                  },
+                  "findings": {
+                    "minItems": 1
+                  },
+                  "ledgerDisposition": {
+                    "properties": {
+                      "result": {
+                        "const": "NOT_READY"
+                      }
+                    }
+                  }
                 }
               }
             ],
             "properties": {
-              "verdict": { "type": "string", "enum": ["READY", "NOT_READY"] },
-              "summary": { "type": "string", "minLength": 1 },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "READY",
+                  "NOT_READY"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1200
+              },
               "findings": {
                 "type": "array",
+                "maxItems": 12,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["severity", "confidence", "path", "line", "violatedContract", "scenario", "safeFix", "validation"],
+                  "required": [
+                    "severity",
+                    "confidence",
+                    "path",
+                    "line",
+                    "violatedContract",
+                    "scenario",
+                    "safeFix",
+                    "validation"
+                  ],
                   "properties": {
-                    "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
-                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "path": { "type": "string", "minLength": 1 },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "P0",
+                        "P1",
+                        "P2",
+                        "P3"
+                      ]
+                    },
+                    "confidence": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
                     "line": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["start", "end"],
+                      "required": [
+                        "start",
+                        "end"
+                      ],
                       "properties": {
-                        "start": { "type": "integer", "minimum": 1 },
-                        "end": { "type": "integer", "minimum": 1 }
+                        "start": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "end": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
                       }
                     },
-                    "violatedContract": { "type": "string", "minLength": 1 },
-                    "scenario": { "type": "string", "minLength": 1 },
-                    "safeFix": { "type": "string", "minLength": 1 },
-                    "validation": { "type": "string", "minLength": 1 }
+                    "violatedContract": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    },
+                    "scenario": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    },
+                    "safeFix": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    },
+                    "validation": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    }
                   }
                 }
               },
               "validationEvidence": {
                 "type": "array",
+                "maxItems": 16,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["check", "status", "evidence"],
+                  "required": [
+                    "check",
+                    "status",
+                    "evidence"
+                  ],
                   "properties": {
-                    "check": { "type": "string", "minLength": 1 },
-                    "status": { "type": "string", "enum": ["VERIFIED", "MISSING", "STALE", "NOT_APPLICABLE"] },
-                    "evidence": { "type": "string", "minLength": 1 }
+                    "check": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "VERIFIED",
+                        "REPORTED",
+                        "MISSING",
+                        "STALE",
+                        "NOT_APPLICABLE"
+                      ]
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 800
+                    }
                   }
                 }
               },
-              "residualRisks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "residualRisks": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
               "ledgerDisposition": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["artifactPath", "gateId", "result", "evidenceSummary", "requiredNextState"],
+                "required": [
+                  "artifactPath",
+                  "gateId",
+                  "result",
+                  "evidenceSummary",
+                  "requiredNextState"
+                ],
                 "properties": {
-                  "artifactPath": { "type": "string", "minLength": 1 },
-                  "gateId": { "type": "string", "minLength": 1 },
-                  "result": { "type": "string", "enum": ["READY", "NOT_READY"] },
-                  "evidenceSummary": { "type": "string", "minLength": 1 },
-                  "requiredNextState": { "type": "string", "minLength": 1 }
+                  "artifactPath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "gateId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "READY",
+                      "NOT_READY"
+                    ]
+                  },
+                  "evidenceSummary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1200
+                  },
+                  "requiredNextState": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  }
                 }
               }
             }
@@ -199,23 +502,578 @@
       "failFast": false
     },
     {
-      "agent": "pi-workbench.worker",
-      "phase": "Fix",
-      "label": "Apply supported fixes",
-      "as": "fixes",
-      "task": "Reconcile review feedback once as the sole implementer.\n\nTask: {task}\nPlan: {outputs.plan}\nInitial implementation: {outputs.implementation}\nCorrectness/runtime structured review: {outputs.correctness}\nTests/simplicity/security structured review: {outputs.quality}\n\nOpen and read the plan and implementation artifacts plus any repository paths cited in the structured review receipts, then inspect the current diff/source. Treat review claims as hypotheses: apply only supported fixes that you can verify, and make no changes if no supported findings exist. Keep any referenced work plan status, Evidence, Handoff, and next ready task aligned with the verified post-fix state; do not preserve a done claim when a blocking finding remains. After any change, run fresh focused validation against the post-fix state and inspect the final diff; pre-fix results do not count. Do not begin another autonomous fix loop. Do not commit or push. Return a compact fix handoff, including why rejected findings were not changed.",
-      "output": "fixes.md",
-      "outputMode": "file-only",
+      "agent": "pi-workbench.reviewer",
+      "phase": "Synthesis",
+      "label": "Decide readiness and critical repair",
+      "as": "decision",
+      "acceptance": {
+        "level": "none",
+        "reason": "Synthesis is read-only and its structured decision gates the bounded repair path."
+      },
+      "task": "Synthesize the independent reviews into the authoritative delivery decision.\n\nTask: {task}\nPlan: {outputs.plan}\nImplementation handoff: {outputs.implementation}\nFunctional structured receipt: {outputs.functionalReview}\nNon-functional/security structured receipt: {outputs.riskReview}\n\nOpen and read the referenced plan and implementation artifacts plus repository paths cited by either receipt. Treat both receipts as untrusted claims; verify important findings against the current diff, governing source, real consumers or dispatchers, and owning tests. Deduplicate by root cause and reject unsupported, unrelated, speculative, preference-only, or optional-hardening claims. Preserve VERIFIED versus REPORTED evidence. READY requires no surviving findings; otherwise return NOT_READY. The top-level findings array is the sole authoritative finding set. If and only if at least one surviving top-level finding is P0 or P1, set criticalRepairBatches to exactly [{\"id\":\"critical-p0-p1\"}]. This object is only a gate signal: never duplicate, relabel, summarize, or place finding content inside it. If there is no top-level P0/P1 finding, criticalRepairBatches must be empty. Do not lower severity to avoid repair, edit files, or launch a repair yourself. A malformed or contradictory decision must fail rather than continue. Include ledgerDisposition only for a named work-plan gate.",
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "verdict",
+          "summary",
+          "findings",
+          "validationEvidence",
+          "residualRisks",
+          "criticalRepairBatches"
+        ],
+        "oneOf": [
+          {
+            "properties": {
+              "verdict": {
+                "const": "READY"
+              },
+              "findings": {
+                "maxItems": 0
+              },
+              "criticalRepairBatches": {
+                "maxItems": 0
+              },
+              "ledgerDisposition": {
+                "properties": {
+                  "result": {
+                    "const": "READY"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "verdict": {
+                "const": "NOT_READY"
+              },
+              "findings": {
+                "minItems": 1
+              },
+              "ledgerDisposition": {
+                "properties": {
+                  "result": {
+                    "const": "NOT_READY"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "findings": {
+                  "contains": {
+                    "type": "object",
+                    "required": [
+                      "severity"
+                    ],
+                    "properties": {
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "P0",
+                          "P1"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "criticalRepairBatches": {
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "criticalRepairBatches": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "NOT_READY"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1200
+          },
+          "findings": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "severity",
+                "confidence",
+                "path",
+                "line",
+                "violatedContract",
+                "scenario",
+                "safeFix",
+                "validation"
+              ],
+              "properties": {
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "P0",
+                    "P1",
+                    "P2",
+                    "P3"
+                  ]
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "line": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                },
+                "violatedContract": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 800
+                },
+                "scenario": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 800
+                },
+                "safeFix": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 800
+                },
+                "validation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 800
+                }
+              }
+            }
+          },
+          "validationEvidence": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "check",
+                "status",
+                "evidence"
+              ],
+              "properties": {
+                "check": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "VERIFIED",
+                    "REPORTED",
+                    "MISSING",
+                    "STALE",
+                    "NOT_APPLICABLE"
+                  ]
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 800
+                }
+              }
+            }
+          },
+          "residualRisks": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "ledgerDisposition": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifactPath",
+              "gateId",
+              "result",
+              "evidenceSummary",
+              "requiredNextState"
+            ],
+            "properties": {
+              "artifactPath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "gateId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "READY",
+                  "NOT_READY"
+                ]
+              },
+              "evidenceSummary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1200
+              },
+              "requiredNextState": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 800
+              }
+            }
+          },
+          "criticalRepairBatches": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "const": "critical-p0-p1"
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputMode": "inline",
       "progress": false
     },
     {
-      "agent": "pi-workbench.reviewer",
-      "phase": "Final review",
-      "label": "Verify final state",
-      "as": "final",
-      "task": "Perform a final read-only review of the delivered state.\n\nTask: {task}\nPlan: {outputs.plan}\nInitial implementation: {outputs.implementation}\nCorrectness/runtime structured review: {outputs.correctness}\nTests/simplicity/security structured review: {outputs.quality}\nFix handoff: {outputs.fixes}\n\nOpen and read the plan, implementation, and fix artifacts plus any repository paths cited in the structured review receipts, but treat every receipt as an untrusted claim. Scope and refine broad or truncated searches. Inspect the current diff and governing source, real consumers or dispatchers, and owning tests. Independently verify that supported findings were resolved without regressions, reject unsupported or duplicate findings, and require relevant validation performed after the last mutation. If a work plan is referenced, verify its named acceptance criteria and that status, Evidence, Handoff, and next ready task match reality. Missing required post-fix evidence makes the result NOT READY. Do not edit files. Return a concise human-readable review whose first line is READY when no actionable defect survives, otherwise NOT READY. Include the summary, ordered findings with severity/confidence/location/contract/scenario/safe fix/validation, current validation evidence, meaningful residual risks, and a work-plan disposition only for a named gate.",
-      "outputMode": "inline",
-      "progress": false
+      "phase": "Bounded critical repair",
+      "label": "Repair one critical batch if needed",
+      "expand": {
+        "from": {
+          "output": "decision",
+          "path": "/criticalRepairBatches"
+        },
+        "item": "repairBatch",
+        "key": "/id",
+        "maxItems": 1,
+        "onEmpty": "skip"
+      },
+      "parallel": {
+        "agent": "pi-workbench.worker",
+        "label": "Repair {repairBatch.id}",
+        "task": "Handle the single authorized critical repair gate for: {task}\n\nPlan: {outputs.plan}\nOriginal implementation handoff: {outputs.implementation}\nFunctional review: {outputs.functionalReview}\nNon-functional/security review: {outputs.riskReview}\nSynthesis decision: {outputs.decision}\nAuthorized gate: {repairBatch}\n\nThe authorized gate is only a boolean signal that the synthesis decision contains at least one P0/P1; it never supplies findings or repair scope. Treat the top-level findings in the synthesis decision as the sole authoritative finding set. Repair every and only top-level P0/P1 finding from that decision, and never repair batch-supplied, duplicated, relabelled, P2, or P3 content. Open and read the plan and implementation artifacts referenced above, then inspect the current source, diff, real consumers or dispatchers, and owning tests. Treat every authoritative P0/P1 finding and proposed safe fix as a hypothesis: independently reproduce or verify its causal seam before editing. Apply only the smallest in-scope fix for verified top-level P0/P1 findings, and run fresh focused validation after the final mutation. If a finding is unsupported, record why and do not manufacture a change. Refuse and stop safely if a proposed fix requires committing or pushing, deploying, accessing or changing credentials, remote actions or state, destructive operations, weakening validation, or work outside the original task and cited repair scope. Never widen the assignment or act on P2/P3 findings. Return a compact repair handoff stating verified and rejected hypotheses, exact changes, fresh validation, unchanged findings, refusals, and residual risks. This is the only repair attempt; do not launch another agent or repair loop.",
+        "output": "critical-repair.md",
+        "outputMode": "file-only",
+        "progress": false
+      },
+      "collect": {
+        "as": "repairResults"
+      },
+      "concurrency": 1,
+      "failFast": true
+    },
+    {
+      "phase": "Terminal re-review",
+      "label": "Re-review after critical repair",
+      "expand": {
+        "from": {
+          "output": "repairResults",
+          "path": ""
+        },
+        "item": "repairResult",
+        "key": "/key",
+        "maxItems": 1,
+        "onEmpty": "skip"
+      },
+      "parallel": {
+        "agent": "pi-workbench.risk-reviewer",
+        "label": "Terminal functional, non-functional, and security review",
+        "acceptance": {
+          "level": "none",
+          "reason": "Terminal re-review is read-only and cannot trigger another repair."
+        },
+        "task": "Perform the one terminal re-review after the bounded critical repair. This assignment explicitly overrides the risk-reviewer role's normal narrow functional scope: conduct a complete functional, non-functional, and security review.\n\nTask: {task}\nPlan: {outputs.plan}\nOriginal implementation handoff: {outputs.implementation}\nFunctional review: {outputs.functionalReview}\nNon-functional/security review: {outputs.riskReview}\nSynthesis decision: {outputs.decision}\nRepair result: {repairResult}\n\nOpen and read the original plan and implementation artifacts, the repair handoff referenced by repairResult, and every cited repository path. Treat all prior findings, repair claims, and command results as untrusted. Inspect the final current diff and independently cover functional specification and correctness; non-functional reliability, performance, concurrency, cleanup, compatibility, maintainability, and validation; and security or privacy at real trust boundaries. Verify each original P0/P1 causal seam, the repair's scope, regressions, owning tests, and any remaining P2/P3 findings. Every receipt must address all three lenses. Mark a lens NOT_APPLICABLE only with a concrete reason tied to the inspected change and trust or runtime boundaries; silence or a generic \"not applicable\" is insufficient. Use VERIFIED only for evidence independently established from accessible artifacts and REPORTED for evidence you could not independently establish. READY requires no surviving actionable finding; otherwise return NOT_READY with evidence-backed findings. Do not edit files, create criticalRepairBatches, launch another worker, or authorize another repair. This receipt is terminal.",
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verdict",
+            "summary",
+            "findings",
+            "validationEvidence",
+            "residualRisks"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "verdict": {
+                  "const": "READY"
+                },
+                "findings": {
+                  "maxItems": 0
+                },
+                "ledgerDisposition": {
+                  "properties": {
+                    "result": {
+                      "const": "READY"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "verdict": {
+                  "const": "NOT_READY"
+                },
+                "findings": {
+                  "minItems": 1
+                },
+                "ledgerDisposition": {
+                  "properties": {
+                    "result": {
+                      "const": "NOT_READY"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "READY",
+                "NOT_READY"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1200
+            },
+            "findings": {
+              "type": "array",
+              "maxItems": 12,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "severity",
+                  "confidence",
+                  "path",
+                  "line",
+                  "violatedContract",
+                  "scenario",
+                  "safeFix",
+                  "validation"
+                ],
+                "properties": {
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "P0",
+                      "P1",
+                      "P2",
+                      "P3"
+                    ]
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "line": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "start",
+                      "end"
+                    ],
+                    "properties": {
+                      "start": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "end": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    }
+                  },
+                  "violatedContract": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  },
+                  "scenario": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  },
+                  "safeFix": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  },
+                  "validation": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  }
+                }
+              }
+            },
+            "validationEvidence": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "check",
+                  "status",
+                  "evidence"
+                ],
+                "properties": {
+                  "check": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "VERIFIED",
+                      "REPORTED",
+                      "MISSING",
+                      "STALE",
+                      "NOT_APPLICABLE"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 800
+                  }
+                }
+              }
+            },
+            "residualRisks": {
+              "type": "array",
+              "maxItems": 12,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "ledgerDisposition": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "artifactPath",
+                "gateId",
+                "result",
+                "evidenceSummary",
+                "requiredNextState"
+              ],
+              "properties": {
+                "artifactPath": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "gateId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "READY",
+                    "NOT_READY"
+                  ]
+                },
+                "evidenceSummary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1200
+                },
+                "requiredNextState": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 800
+                }
+              }
+            }
+          }
+        },
+        "outputMode": "inline",
+        "progress": false
+      },
+      "collect": {
+        "as": "finalReviews"
+      },
+      "concurrency": 1,
+      "failFast": true
     }
   ]
 }

@@ -1,9 +1,12 @@
+import { execFile, execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 export const REPO_INSPECTION_ACTIONS = [
 	"status",
 	"diff",
 	"diff-staged",
+	"diff-worktree",
 	"diff-range",
 	"diff-stat",
 	"changed-files",
@@ -24,10 +27,106 @@ export interface RepoInspectionInput {
 	limit?: number;
 	lineStart?: number;
 	lineEnd?: number;
+	context?: number;
 }
 
-export function normalizeGitPaths(cwd: string, paths: string[] | undefined): string[] {
-	const root = path.resolve(cwd);
+export const DEFAULT_DIFF_CONTEXT = 3;
+export const MAX_DIFF_CONTEXT = 20;
+const MAX_GIT_CAPTURE_BYTES = 64 * 1_024 * 1_024;
+
+export interface ReadOnlyGitResult {
+	stdout: string;
+	stderr: string;
+	code: number;
+	killed: boolean;
+}
+
+function sanitizedGitEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	return {
+		...Object.fromEntries(
+			Object.entries(environment).filter(([name]) => !name.toUpperCase().startsWith("GIT_")),
+		),
+		GIT_OPTIONAL_LOCKS: "0",
+	};
+}
+
+/** Execute only a previously built Git argv without a shell. Every invocation
+ * gets the same ambient-Git-variable isolation as worktree discovery while
+ * retaining AbortSignal and timeout enforcement. */
+export async function executeReadOnlyGit(
+	args: string[],
+	cwd: string,
+	signal?: AbortSignal,
+	timeout = 30_000,
+	environment: NodeJS.ProcessEnv = process.env,
+): Promise<ReadOnlyGitResult> {
+	return await new Promise((resolve) => {
+		execFile("git", args, {
+			cwd,
+			encoding: "utf8",
+			env: sanitizedGitEnvironment(environment),
+			maxBuffer: MAX_GIT_CAPTURE_BYTES,
+			shell: false,
+			signal,
+			timeout,
+		}, (error, stdout, stderr) => {
+			resolve({
+				stdout,
+				stderr: stderr || (error?.killed ? `Git inspection process was terminated after ${timeout}ms.` : error?.message ?? ""),
+				code: typeof error?.code === "number" ? error.code : error ? 1 : 0,
+				killed: Boolean(error?.killed),
+			});
+		});
+	});
+}
+
+function canonicalPath(value: string): string {
+	const resolved = path.resolve(value);
+	try {
+		return realpathSync.native(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
+/** Resolve the concrete worktree root without allowing ambient GIT_* variables
+ * to redirect discovery to a different checkout. Linked worktrees retain their
+ * own root because --show-toplevel reports the active worktree. */
+export function canonicalGitWorktreeRoot(cwd: string, environment: NodeJS.ProcessEnv = process.env): string {
+	const start = canonicalPath(cwd);
+
+	let output: string;
+	try {
+		output = execFileSync("git", [
+			"--no-optional-locks",
+			"--no-pager",
+			"-c",
+			"core.fsmonitor=false",
+			"-C",
+			start,
+			"rev-parse",
+			"--show-toplevel",
+		], {
+			encoding: "utf8",
+			env: sanitizedGitEnvironment(environment),
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 5_000,
+		}).trim();
+	} catch {
+		throw new Error(`inspect_repo requires a Git worktree: ${cwd}`);
+	}
+
+	if (!output) throw new Error(`inspect_repo could not resolve the Git worktree root: ${cwd}`);
+	const root = canonicalPath(output);
+	const relative = path.relative(root, start);
+	if (relative.startsWith("..") || path.isAbsolute(relative)) {
+		throw new Error(`Git reported a worktree root that does not contain the current directory: ${cwd}`);
+	}
+	return root;
+}
+
+export function normalizeGitPaths(repoRoot: string, paths: string[] | undefined): string[] {
+	const root = canonicalPath(repoRoot);
 	return (paths ?? []).map((entry) => {
 		const raw = entry.startsWith("@") ? entry.slice(1) : entry;
 		if (raw.startsWith("-")) throw new Error(`Git inspection path may not start with '-': ${entry}`);
@@ -35,7 +134,7 @@ export function normalizeGitPaths(cwd: string, paths: string[] | undefined): str
 		const relative = path.relative(root, absolute);
 		if (!relative) return ".";
 		if (relative.startsWith("..") || path.isAbsolute(relative)) {
-			throw new Error(`Git inspection path must be below the current repository: ${entry}`);
+			throw new Error(`Git inspection path must be below the current Git worktree: ${entry}`);
 		}
 		return relative.split(path.sep).join("/");
 	});
@@ -75,13 +174,22 @@ function blameLines(input: RepoInspectionInput): string[] {
 	return ["-L", `${input.lineStart},${end}`];
 }
 
+function diffContext(context: number | undefined): string {
+	const value = context ?? DEFAULT_DIFF_CONTEXT;
+	if (!Number.isInteger(value) || value < 0 || value > MAX_DIFF_CONTEXT) {
+		throw new Error(`Diff context must be an integer between 0 and ${MAX_DIFF_CONTEXT}: ${value}`);
+	}
+	return `--unified=${value}`;
+}
+
 function validateFields(input: RepoInspectionInput): void {
-	const fields = ["ref", "base", "head", "staged", "limit", "lineStart", "lineEnd"] as const;
+	const fields = ["ref", "base", "head", "staged", "limit", "lineStart", "lineEnd", "context"] as const;
 	const allowed: Record<RepoInspectionAction, ReadonlySet<(typeof fields)[number]>> = {
 		status: new Set(),
-		diff: new Set(),
-		"diff-staged": new Set(),
-		"diff-range": new Set(["base", "head"]),
+		diff: new Set(["context"]),
+		"diff-staged": new Set(["context"]),
+		"diff-worktree": new Set(["context"]),
+		"diff-range": new Set(["base", "head", "context"]),
 		"diff-stat": new Set(["base", "head", "staged"]),
 		"changed-files": new Set(["base", "head", "staged"]),
 		show: new Set(["ref"]),
@@ -92,11 +200,15 @@ function validateFields(input: RepoInspectionInput): void {
 	if (unsupported.length) throw new Error(`${input.action} does not accept: ${unsupported.join(", ")}.`);
 }
 
+export function buildHeadVerificationGitArgs(): string[] {
+	return ["--no-optional-locks", "--no-pager", "-c", "core.fsmonitor=false", "rev-parse", "--verify", "--quiet", "HEAD"];
+}
+
 /** Build a fixed, inspection-only Git invocation. No caller-provided option is
  * passed through and every path is placed after `--`. */
-export function buildReadOnlyGitArgs(cwd: string, input: RepoInspectionInput): string[] {
+export function buildReadOnlyGitArgs(repoRoot: string, input: RepoInspectionInput): string[] {
 	validateFields(input);
-	const paths = normalizeGitPaths(cwd, input.paths);
+	const paths = normalizeGitPaths(repoRoot, input.paths);
 	const scope = paths.length ? ["--", ...paths] : [];
 	// Avoid optional index writes, pagers, and repository-configured fsmonitor
 	// hooks. Each invocation remains a non-interactive inspection subprocess.
@@ -107,9 +219,10 @@ export function buildReadOnlyGitArgs(cwd: string, input: RepoInspectionInput): s
 
 	switch (input.action) {
 		case "status": return [...prefix, "status", "--short", "--branch", ...scope];
-		case "diff": return [...prefix, "diff", ...diff, "--unified=80", ...scope];
-		case "diff-staged": return [...prefix, "diff", "--cached", ...diff, "--unified=80", ...scope];
-		case "diff-range": return [...prefix, "diff", ...diff, "--unified=80", ...range(input, true), ...scope];
+		case "diff": return [...prefix, "diff", ...diff, diffContext(input.context), ...scope];
+		case "diff-staged": return [...prefix, "diff", "--cached", ...diff, diffContext(input.context), ...scope];
+		case "diff-worktree": return [...prefix, "diff", ...diff, diffContext(input.context), "HEAD", ...scope];
+		case "diff-range": return [...prefix, "diff", ...diff, diffContext(input.context), ...range(input, true), ...scope];
 		case "diff-stat": return [...prefix, "diff", ...diff, "--stat", ...range(input, false), ...scope];
 		case "changed-files": return [...prefix, "diff", ...diff, "--name-status", ...range(input, false), ...scope];
 		case "show": return [...prefix, "show", ...diff, "--format=fuller", normalizeGitRef(input.ref), ...scope];

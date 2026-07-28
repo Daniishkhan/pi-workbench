@@ -11,6 +11,7 @@ export const ROLE_POLICIES: Readonly<Record<string, RolePolicy>> = {
 	"pi-workbench.planner": { capability: "read-only", surfaces: ["one-off", "workflow"] },
 	"pi-workbench.worker": { capability: "writer", surfaces: ["one-off", "workflow"] },
 	"pi-workbench.reviewer": { capability: "read-only", surfaces: ["one-off", "workflow"] },
+	"pi-workbench.risk-reviewer": { capability: "read-only", surfaces: ["workflow"] },
 };
 
 export function rolePolicyForAgent(runtimeName: string): RolePolicy | undefined {

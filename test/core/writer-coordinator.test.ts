@@ -22,8 +22,9 @@ test("excludes a second writer for the same cwd across coordinator instances", (
 	const second = new WriterCoordinator({ rootDir, pid: 200, processAlive: () => true });
 	const lease = first.acquire(cwd, "workbench:deliver")!;
 	assert.throws(() => second.acquire(cwd, "team:writer"), /already owns/);
-	first.attachRun(lease.token, "run-1");
+	assert.equal(first.attachRun(lease.token, "run-1", "/tmp/async-run-1"), true);
 	assert.equal(second.list()[0]?.runId, "run-1");
+	assert.equal(second.list()[0]?.asyncDir, "/tmp/async-run-1");
 	assert.equal(second.releaseRun("run-1"), true);
 	assert.equal(second.acquire(cwd, "team:writer")?.owner, "team:writer");
 });
@@ -36,7 +37,11 @@ test("reclaims a dead pre-launch owner but never an uncertain launch", () => {
 	const next = new WriterCoordinator({ rootDir, pid: 200, processAlive: () => false });
 	const replacement = next.acquire(cwd, "replacement")!;
 	assert.equal(replacement.owner, "replacement");
-	next.markUncertain(replacement.token);
+	assert.equal(next.markUncertain(replacement.token, "run-uncertain", "/tmp/run-uncertain"), true);
+	assert.deepEqual(
+		{ runId: next.get(cwd)?.runId, asyncDir: next.get(cwd)?.asyncDir, uncertain: next.get(cwd)?.uncertain },
+		{ runId: "run-uncertain", asyncDir: "/tmp/run-uncertain", uncertain: true },
+	);
 	const later = new WriterCoordinator({ rootDir, pid: 300, processAlive: () => false });
 	assert.throws(() => later.acquire(cwd, "unsafe-replacement"), /launch uncertain/);
 	assert.equal(later.releaseCwd(cwd), true);
@@ -49,10 +54,26 @@ test("stale tokens cannot mutate or release a replacement lease", () => {
 	const stale = first.acquire(cwd, "first")!;
 	assert.equal(first.releaseCwd(cwd), true);
 	const replacement = first.acquire(cwd, "replacement")!;
-	first.attachRun(stale.token, "stale-run");
+	assert.equal(first.attachRun(stale.token, "stale-run"), false);
 	assert.equal(first.release(stale.token), false);
 	assert.equal(first.get(cwd)?.token, replacement.token);
 	assert.equal(first.get(cwd)?.runId, undefined);
+});
+
+test("ignores a crash-stranded pending lease and publishes a complete canonical lease", () => {
+	const rootDir = root();
+	const cwd = path.join(rootDir, "repo");
+	const canonical = path.resolve(cwd);
+	const key = createHash("sha256").update(canonical).digest("hex");
+	const pending = path.join(rootDir, `.pending-${key}-crashed`);
+	fs.mkdirSync(pending, { recursive: true });
+	fs.writeFileSync(path.join(pending, "owner.json"), "{\"partial\":true}\n");
+	const coordinator = new WriterCoordinator({ rootDir, processAlive: () => true });
+	const lease = coordinator.acquire(cwd, "replacement")!;
+	const finalDir = path.join(rootDir, key);
+	assert.equal(coordinator.list().length, 1);
+	assert.equal(JSON.parse(fs.readFileSync(path.join(finalDir, "owner.json"), "utf8")).token, lease.token);
+	assert.equal(fs.existsSync(pending), true, "ignored pending evidence is preserved for conservative cleanup");
 });
 
 test("canonicalizes every nested directory in one Git worktree to the same writer key", () => {

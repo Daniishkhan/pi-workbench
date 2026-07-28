@@ -74,6 +74,79 @@ test("drops overrides for removed orchestration agents", () => {
 	assert.equal(overrides.scout.model, "existing/model");
 });
 
+test("upgrades only known packaged model defaults while preserving custom overrides", () => {
+	const { value } = fixture();
+	value.subagents.agentOverrides["pi-workbench.worker"] = {
+		model: "openai-codex/gpt-5.6-terra",
+		thinking: "xhigh",
+		fallbackModels: ["openai-codex/gpt-5.6-sol", "kimi-coding/k3"],
+	};
+	value.subagents.agentOverrides["pi-workbench.reviewer"] = {
+		model: "openai-codex/gpt-5.6-sol",
+		thinking: "xhigh",
+		fallbackModels: ["kimi-coding/k3:high", "google-vertex/gemini-3.6-flash:low"],
+	};
+	value.subagents.agentOverrides["pi-workbench.risk-reviewer"] = {
+		model: "custom/risk-reviewer",
+		thinking: "medium",
+		fallbackModels: ["custom/fallback"],
+	};
+	const recommended = {
+		"pi-workbench.worker": {
+			model: "openai-codex/gpt-5.6-terra",
+			thinking: "high",
+			fallbackModels: ["kimi-coding/k3:high"],
+		},
+		"pi-workbench.reviewer": {
+			model: "openai-codex/gpt-5.6-sol",
+			thinking: "high",
+			fallbackModels: ["openai-codex/gpt-5.5:high"],
+		},
+		"pi-workbench.risk-reviewer": {
+			model: "anthropic-vertex/claude-opus-4-8",
+			thinking: "high",
+			fallbackModels: ["google-vertex/gemini-3.1-pro-preview:high"],
+		},
+	};
+	const migrated = buildMigratedSettings(value, recommended);
+	assert.deepEqual(migrated.subagents.agentOverrides["pi-workbench.worker"].fallbackModels, [
+		"kimi-coding/k3:high",
+	]);
+	assert.equal(migrated.subagents.agentOverrides["pi-workbench.worker"].thinking, "high");
+	assert.deepEqual(migrated.subagents.agentOverrides["pi-workbench.reviewer"].fallbackModels, [
+		"openai-codex/gpt-5.5:high",
+	]);
+	assert.equal(migrated.subagents.agentOverrides["pi-workbench.reviewer"].thinking, "high");
+	assert.deepEqual(
+		migrated.subagents.agentOverrides["pi-workbench.risk-reviewer"],
+		value.subagents.agentOverrides["pi-workbench.risk-reviewer"],
+		"custom fallback fleets must remain untouched",
+	);
+
+	const { value: customized } = fixture();
+	customized.subagents.agentOverrides["pi-workbench.worker"] = {
+		model: "custom/worker-primary",
+		thinking: "xhigh",
+		fallbackModels: ["openai-codex/gpt-5.6-sol", "kimi-coding/k3"],
+	};
+	customized.subagents.agentOverrides["pi-workbench.reviewer"] = {
+		model: "custom/functional-reviewer",
+		thinking: "xhigh",
+		fallbackModels: ["custom/reviewer-fallback:low"],
+	};
+	const customizedMigrated = buildMigratedSettings(customized, recommended);
+	assert.deepEqual(
+		customizedMigrated.subagents.agentOverrides["pi-workbench.worker"],
+		customized.subagents.agentOverrides["pi-workbench.worker"],
+		"a custom primary must preserve its fleet even when its fallbacks match an old packaged default",
+	);
+	assert.deepEqual(
+		customizedMigrated.subagents.agentOverrides["pi-workbench.reviewer"],
+		customized.subagents.agentOverrides["pi-workbench.reviewer"],
+		"a customized reviewer fleet must remain untouched",
+	);
+});
+
 test("applies with backups, archives the legacy scout, and rolls back safely", () => {
 	const { settings, scout, value } = fixture();
 	const applied = applyMigration(settings, scout);

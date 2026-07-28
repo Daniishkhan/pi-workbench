@@ -1,4 +1,4 @@
-import { classifySubagentStatusText, type ReconciledRunState } from "./run-lifecycle.ts";
+import { classifySubagentStatusText, reconcileSubagentRunState, type ReconciledRunState } from "./run-lifecycle.ts";
 import type { SubagentRpcClient } from "./subagent-rpc.ts";
 import type { WriterCoordinator, WriterLease } from "./writer-coordinator.ts";
 
@@ -24,9 +24,13 @@ async function reconcileLease(
 			coordinator.markUncertain(lease.token);
 			return "unknown";
 		}
-		const state = classifySubagentStatusText(reply.data?.text);
+		const state = reconcileSubagentRunState({
+			runId: lease.runId,
+			statusText: reply.data?.text,
+			asyncDir: lease.asyncDir,
+		});
 		if (state === "terminal") coordinator.release(lease.token);
-		else if (state === "active") coordinator.attachRun(lease.token, lease.runId);
+		else if (state === "active") coordinator.attachRun(lease.token, lease.runId, lease.asyncDir);
 		else coordinator.markUncertain(lease.token);
 		return state;
 	} catch {

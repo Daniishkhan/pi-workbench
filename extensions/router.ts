@@ -2,6 +2,11 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+	MAX_FRESH_BRIEF_LENGTH,
+	requireSelfContainedWorkflowBrief,
+	type AssignmentBoundary,
+} from "./core/assignment-boundary.ts";
 import type { EngineeringConfig } from "./core/config.ts";
 import { isChildSession } from "./core/env.ts";
 import { beginGuardedSpawn } from "./core/guarded-spawn.ts";
@@ -24,11 +29,14 @@ import type { WorkflowService } from "./workflows.ts";
 const MAX_TASK_LENGTH = 32_768;
 const Params = Type.Object({
 	action: StringEnum(ENGINEERING_ACTIONS),
-	task: Type.Optional(Type.String({ maxLength: MAX_TASK_LENGTH, description: "Task or target. Required except for status." })),
-	model: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "Optional model override for one-off actions." })),
+	task: Type.Optional(Type.String({
+		maxLength: MAX_TASK_LENGTH,
+		description: "Task or target. Fresh plan, implement, deliver, and audit assignments require Objective:, Scope:, Constraints:, and Done when:, or Artifact: plus stable Task:/Milestone:/Gate: (ID suffix optional).",
+	})),
 }, { additionalProperties: false });
 
 export interface RegisterRouterOptions {
+	assignmentBoundary: AssignmentBoundary;
 	config: EngineeringConfig;
 	workflows?: WorkflowService;
 	writerCoordinator: WriterCoordinator;
@@ -39,12 +47,17 @@ const ACTION_LIST = ENGINEERING_ACTIONS.filter((action) => action !== "status").
 
 function engineeringStatusText(options: RegisterRouterOptions): string {
 	const leases = options.writerCoordinator.list();
+	const now = Date.now();
 	return [
 		"Pi Engineering",
 		`- Workflow service: ${options.workflows ? "available" : "unavailable"}`,
 		`- Write lock: ${options.config.writeLock.enabled ? "enabled" : "disabled"}`,
 		`- Active write locks: ${leases.length}`,
-		...leases.map((lease) => `  - ${lease.cwd}: ${lease.owner}${lease.runId ? ` (${lease.runId})` : ""}${lease.uncertain ? " [uncertain]" : ""}`),
+		...leases.map((lease) => {
+			const ageSeconds = Math.max(0, Math.floor((now - lease.createdAt) / 1_000));
+			const age = ageSeconds < 60 ? `${ageSeconds}s` : ageSeconds < 3_600 ? `${Math.floor(ageSeconds / 60)}m` : `${Math.floor(ageSeconds / 3_600)}h`;
+			return `  - ${lease.cwd}: ${lease.owner}${lease.runId ? ` (${lease.runId})` : ""}${lease.uncertain ? " [uncertain]" : ""}; age ${age}; pid ${lease.pid}${lease.sessionId ? `; session ${lease.sessionId}` : ""}`;
+		}),
 		"",
 		`Actions: ${ACTION_LIST}.`,
 	].join("\n");
@@ -52,7 +65,17 @@ function engineeringStatusText(options: RegisterRouterOptions): string {
 
 async function statusText(options: RegisterRouterOptions, runId?: string, signal?: AbortSignal): Promise<string> {
 	const engineering = engineeringStatusText(options);
-	if (!runId) return engineering;
+	if (!runId) {
+		try {
+			const reply = await options.rpc.request("status", {}, signal);
+			const runtime = reply.success
+				? reply.data?.text?.trim() || "No active specialists reported."
+				: `Unavailable: ${reply.error?.message || "the shared runtime returned no status."}`;
+			return `${engineering}\n\nShared pi-subagents runtime (read-only inventory):\n${runtime}`;
+		} catch (error) {
+			return `${engineering}\n\nShared pi-subagents runtime (read-only inventory):\nUnavailable: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
 	const reply = await options.rpc.request("status", { runId }, signal);
 	if (!reply.success) throw new Error(reply.error?.message || `Unable to inspect engineering run '${runId}'.`);
 	const run = reply.data?.text?.trim() || `Run '${runId}' returned no status text.`;
@@ -96,20 +119,13 @@ export function parseEngineeringCommand(args: string): ParsedEngineeringCommand 
 export default function registerRouter(pi: ExtensionAPI, options: RegisterRouterOptions): void {
 	if (isChildSession()) return;
 	const rpc = options.rpc;
-	function normalizeModel(model: string | undefined): string | undefined {
-		if (model === undefined) return undefined;
-		const value = model.trim();
-		if (!value) throw new Error("Engineering model override must not be blank.");
-		if (value.length > 256) throw new Error("Engineering model override must be at most 256 characters.");
-		return value;
-	}
 
 	async function spawnOneOff(
 		ctx: ExtensionContext,
 		action: OneOffAction,
 		task: string,
 		effort: EngineeringEffort,
-		model?: string,
+		origin: "model" | "human",
 		signal?: AbortSignal,
 	) {
 		const assignment = resolveOneOffAssignment(action, effort);
@@ -132,10 +148,10 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 				artifacts: false,
 				maxRuntimeMs: assignment.limits.timeoutMs,
 				...(assignment.limits.turnBudget ? { turnBudget: assignment.limits.turnBudget } : {}),
-				...(model ? { model } : {}),
+				...(origin === "model" ? { context: "fresh" } : {}),
 			},
 			signal,
-			requireRunIdMessage: `Engineering ${action} was accepted without a run id; inspect active specialists before retrying.`,
+			requireRunIdMessage: `Engineering ${action} may have launched but was accepted without a run id; inspect /engineering status or /subagents-fleet before retrying.`,
 		});
 		return {
 			message: `${reply.data?.text?.trim() || `Assigned the ${action} specialist.`}\nEffort: ${effort}${runId ? `\nRun: ${runId}` : ""}`,
@@ -150,13 +166,12 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		ctx: ExtensionContext,
 		action: EngineeringAction,
 		task?: string,
-		model?: string,
 		signal?: AbortSignal,
 		effort: EngineeringEffort = DEFAULT_ENGINEERING_EFFORT,
+		origin: "model" | "human" = "model",
 	) {
-		const selectedModel = normalizeModel(model);
+		if (origin === "model") options.assignmentBoundary.assertModelAction(action);
 		if (action === "status") {
-			if (selectedModel) throw new Error("Engineering model override is only supported for one-off actions: inspect, plan, implement, review.");
 			const runId = task?.trim() || undefined;
 			if (runId && (runId.length > 512 || /\s/.test(runId))) {
 				throw new Error("Engineering status accepts one run id of at most 512 characters.");
@@ -167,13 +182,21 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		if (!target) throw new Error(`Engineering action '${action}' requires a task.`);
 		if (target.length > MAX_TASK_LENGTH) throw new Error(`Engineering task must be at most ${MAX_TASK_LENGTH} characters.`);
 		if (isOneOffAction(action)) {
-			return { action, ...(await spawnOneOff(ctx, action, target, effort, selectedModel, signal)), nextAction: null };
+			if (origin === "model" && (action === "plan" || action === "implement")) requireSelfContainedWorkflowBrief(target);
+			return { action, ...(await spawnOneOff(ctx, action, target, effort, origin, signal)), nextAction: null };
 		}
 		if (!isWorkflowAction(action)) throw new Error(`Unsupported engineering action: ${action}`);
-		if (selectedModel) throw new Error("Engineering model override is only supported for one-off actions: inspect, plan, implement, review.");
+		requireSelfContainedWorkflowBrief(target);
 		if (!options.workflows) throw new Error("Engineering workflows are unavailable.");
-		const launched = await options.workflows.spawn(ctx, action, target, effort, signal);
-		return { action, effort, ...launched, message: `${launched.message}\nEffort: ${effort}`, nextAction: null };
+		const attempt = options.assignmentBoundary.beginWorkflowAttempt();
+		try {
+			const launched = await options.workflows.spawn(ctx, action, target, effort, signal);
+			options.assignmentBoundary.attachWorkflow(attempt, launched.runId);
+			return { action, effort, ...launched, message: `${launched.message}\nEffort: ${effort}`, nextAction: null };
+		} catch (error) {
+			options.assignmentBoundary.failWorkflowAttempt(attempt);
+			throw error;
+		}
 	}
 
 	pi.registerTool({
@@ -183,11 +206,13 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		promptSnippet: "Assign bounded software work to the smallest capable specialist",
 		promptGuidelines: [
 			"Use the smallest action that can complete the task; reserve deliver and audit for their explicit workflows.",
+			`For plan, implement, deliver, or audit, pass either Objective, Scope, Constraints, and Done when fields (at most ${MAX_FRESH_BRIEF_LENGTH} characters) or an artifact plus a stable task, milestone, or gate ID.`,
+			"After a workflow starts or completes, report its run and artifacts and return control. Deliver owns at most one in-run P0/P1 repair; do not launch any further recovery until the user responds.",
 			"Do not delegate again from an engineering specialist.",
 		],
 		parameters: Params,
 		async execute(_id, params, signal, _onUpdate, ctx) {
-			const result = await dispatch(ctx, params.action as EngineeringAction, params.task, params.model, signal);
+			const result = await dispatch(ctx, params.action as EngineeringAction, params.task, signal);
 			return textResult(result.message, result);
 		},
 		renderCall(args, theme) {
@@ -208,7 +233,9 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 		"/engineering status <run-id>",
 		"/engineering [--quick|--standard|--deep] <inspect|plan|implement|review|deliver|audit> <task>",
 		"/engineering unlock  (manual recovery after checking the active run)",
-		"deliver plans, implements, and reviews one bounded change; it never commits, publishes, or deploys",
+		"deliver/audit: Objective: ...; Scope: ...; Constraints: ...; Done when: ...",
+		"/subagents-fleet shows the shared runtime; stop only an exact verified Pi Engineering run",
+		"deliver plans, implements, runs independent functional and risk reviews, and may repair P0/P1 once; it never commits, publishes, or deploys",
 	].join("\n");
 
 	async function command(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -219,13 +246,17 @@ export default function registerRouter(pi: ExtensionAPI, options: RegisterRouter
 			if (!lease) return ctx.ui.notify("No engineering write lock for this worktree.", "info");
 			if (!ctx.hasUI) throw new Error("Manual write-lock release requires interactive confirmation.");
 			const ok = await ctx.ui.confirm("Release engineering write lock?", `${lease.owner}${lease.runId ? `\nRun: ${lease.runId}` : ""}${lease.uncertain ? "\nLaunch state: uncertain" : ""}\n\nOnly release after confirming no implementer is still active.`);
-			if (ok) options.writerCoordinator.releaseCwd(lease.cwd);
-			ctx.ui.notify(ok ? "Write lock released." : "Write lock kept.", ok ? "warning" : "info");
+			const released = ok ? options.writerCoordinator.release(lease.token) : false;
+			ctx.ui.notify(
+				!ok ? "Write lock kept." : released ? "Write lock released." : "Write-lock ownership changed while confirmation was open; inspect status and confirm again.",
+				ok ? "warning" : "info",
+			);
 			return;
 		}
 		try {
 			const parsed = parseEngineeringCommand(args);
-			const result = await dispatch(ctx, parsed.action, parsed.task, undefined, undefined, parsed.effort);
+			options.assignmentBoundary.authorizeHumanAction(parsed.action);
+			const result = await dispatch(ctx, parsed.action, parsed.task, undefined, parsed.effort, "human");
 			ctx.ui.notify(result.message, "info");
 		} catch (error) {
 			ctx.ui.notify(`${error instanceof Error ? error.message : String(error)}\n\n${HELP}`, "error");

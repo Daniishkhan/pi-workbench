@@ -14,6 +14,7 @@ export interface WriterLease {
 	pid: number;
 	sessionId?: string;
 	runId?: string;
+	asyncDir?: string;
 	uncertain?: boolean;
 }
 
@@ -253,11 +254,15 @@ export class WriterCoordinator {
 				pid: this.#pid,
 				...(this.#sessionId ? { sessionId: this.#sessionId } : {}),
 			};
-			fs.mkdirSync(dir, { mode: 0o700 });
+			const pendingDir = path.join(this.#rootDir, `.pending-${this.#key(canonical)}-${lease.token}`);
+			fs.mkdirSync(pendingDir, { mode: 0o700 });
 			try {
-				writeJsonAtomic(path.join(dir, "owner.json"), lease);
+				writeJsonAtomic(path.join(pendingDir, "owner.json"), lease);
+				// Publish only a complete lease. A crash before rename leaves an ignored
+				// pending directory rather than an unreadable canonical lock.
+				fs.renameSync(pendingDir, dir);
 			} catch (error) {
-				fs.rmSync(dir, { recursive: true, force: true });
+				fs.rmSync(pendingDir, { recursive: true, force: true });
 				throw error;
 			}
 			return { ...lease };
@@ -276,13 +281,23 @@ export class WriterCoordinator {
 		});
 	}
 
-	attachRun(token: string | undefined, runId: string | undefined): void {
-		if (!runId) return;
-		this.#update(token, (lease) => ({ ...lease, runId, uncertain: false }));
+	attachRun(token: string | undefined, runId: string | undefined, asyncDir?: string): boolean {
+		if (!runId) return false;
+		return this.#update(token, (lease) => ({
+			...lease,
+			runId,
+			...(asyncDir ? { asyncDir } : {}),
+			uncertain: false,
+		}));
 	}
 
-	markUncertain(token: string | undefined): void {
-		this.#update(token, (lease) => ({ ...lease, uncertain: true }));
+	markUncertain(token: string | undefined, runId?: string, asyncDir?: string): boolean {
+		return this.#update(token, (lease) => ({
+			...lease,
+			...(runId ? { runId } : {}),
+			...(asyncDir ? { asyncDir } : {}),
+			uncertain: true,
+		}));
 	}
 
 	release(token: string | undefined): boolean {

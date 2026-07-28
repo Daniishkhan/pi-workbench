@@ -7,7 +7,7 @@ async function text(file: string): Promise<string> {
 	return readFile(path.resolve(file), "utf8");
 }
 
-test("the public skill selects proportional playbooks without adding retry orchestration", async () => {
+test("the public skill selects proportional playbooks with only one bounded critical convergence pass", async () => {
 	const skill = await text("skills/pi-engineering/SKILL.md");
 
 	assert.match(skill, /Select the smallest action/i);
@@ -23,26 +23,34 @@ test("the public skill selects proportional playbooks without adding retry orche
 	assert.match(skill, /artifact: pi-workbench-feature-ledger/i);
 	assert.match(skill, /stable task or milestone ID/i);
 	assert.match(skill, /one `ready` task or coherent milestone/i);
-	assert.match(skill, /two independent reviewers/i);
+	assert.match(skill, /two model-independent reviewers/i);
 	assert.match(skill, /never the whole open backlog/i);
 	assert.match(skill, /Implicit assistance may inspect, organize, and recommend/i);
 	assert.match(skill, /requires direct user authorization/i);
 	assert.match(skill, /natural-language request[\s\S]*authorizes one bounded implementer/i);
+	assert.match(skill, /assignment to a fresh context must be self-contained/i);
+	assert.match(skill, /Objective:[\s\S]*Scope:[\s\S]*Constraints:[\s\S]*Done when:/i);
+	assert.match(skill, /never pass deictic text/i);
+	assert.match(skill, /Treat async completion as a handoff boundary/i);
+	assert.match(skill, /failed run[\s\S]*final `NOT READY` verdict[\s\S]*never authorizes an improvised follow-up action/i);
 	assert.match(skill, /Choose the action before its effort/i);
 	assert.match(skill, /assign_engineering` tool always uses `standard/i);
 	assert.match(skill, /Deep effort[\s\S]*never adds specialists, phases, persistence, or authority/i);
 	assert.match(skill, /never infer absence from incomplete output/i);
-	assert.match(skill, /Intermediate reviewer steps use validated structured envelopes/i);
-	assert.match(skill, /terminal reviewer returns a human-readable READY or NOT READY/i);
+	assert.match(skill, /Independent reviews, synthesis, and the optional terminal re-review use validated structured envelopes/i);
+	assert.match(skill, /completion renderer preserves a human-readable READY or NOT READY/i);
+	assert.match(skill, /at most one repair batch only for validated P0\/P1 findings/i);
+	assert.match(skill, /workflow stops after that review/i);
 	assert.doesNotMatch(skill, /fresh subagent per task|repeat until approved|five fix rounds/i);
 });
 
 test("leaf roles apply causal, evidence-scaled engineering discipline", async () => {
-	const [scout, planner, worker, reviewer] = await Promise.all([
+	const [scout, planner, worker, reviewer, riskReviewer] = await Promise.all([
 		text("agents/core/fast-scout.md"),
 		text("agents/core/planner.md"),
 		text("agents/core/worker.md"),
 		text("agents/core/reviewer.md"),
+		text("agents/core/risk-reviewer.md"),
 	]);
 
 	assert.match(scout, /first bad state/i);
@@ -59,6 +67,8 @@ test("leaf roles apply causal, evidence-scaled engineering discipline", async ()
 	assert.match(planner, /prewalk the plan/i);
 	assert.match(planner, /consumer or dispatcher and owning test/i);
 	assert.match(planner, /Remove unnecessary files or duplicate steps/i);
+	assert.match(planner, /roughly 100 lines/i);
+	assert.match(planner, /TOO_BROAD/i);
 
 	assert.match(worker, /Fix the first bad state/i);
 	assert.match(worker, /regression or contract test first/i);
@@ -71,6 +81,8 @@ test("leaf roles apply causal, evidence-scaled engineering discipline", async ()
 	assert.match(worker, /Do not mark work `done` without fresh verification/i);
 	assert.match(worker, /prewalk the plan/i);
 	assert.match(worker, /real consumers or dispatchers, and owning tests/i);
+	assert.match(worker, /LINE#HASH/i);
+	assert.match(worker, /per-command timeout/i);
 
 	assert.match(reviewer, /claims, not proof/i);
 	assert.match(reviewer, /addresses the causal seam/i);
@@ -85,20 +97,42 @@ test("leaf roles apply causal, evidence-scaled engineering discipline", async ()
 	assert.match(reviewer, /confidence, precise location/i);
 	assert.match(reviewer, /Reject unrelated pre-existing issues/i);
 	assert.match(reviewer, /optional hardening/i);
+	assert.match(reviewer, /literal: true/i);
+	assert.match(reviewer, /reserve regular expressions for intentional patterns/i);
+	assert.match(reviewer, /same final assistant message as that tool call/i);
+	assert.match(reviewer, /three explicit lenses/i);
+	assert.match(reviewer, /Functional review/i);
+	assert.match(reviewer, /Non-functional review/i);
+	assert.match(reviewer, /Security review/i);
 
-	for (const prompt of [scout, planner, worker, reviewer]) {
+	assert.match(riskReviewer, /non-functional and security reviewer/i);
+	assert.match(riskReviewer, /applicable trust boundaries/i);
+	assert.match(riskReviewer, /failure safety and recovery/i);
+	assert.match(riskReviewer, /resource limits and material performance regressions/i);
+	assert.match(riskReviewer, /comprehensive terminal re-review[\s\S]*pure functional or specification defects/i);
+	assert.match(riskReviewer, /accessibility when user-facing behavior applies/i);
+	assert.match(riskReviewer, /validationEvidence[\s\S]*Security[\s\S]*NOT_APPLICABLE[\s\S]*concrete reason/i);
+	assert.match(riskReviewer, /do not launch more agents/i);
+
+	for (const prompt of [scout, planner, worker, reviewer, riskReviewer]) {
 		assert.match(prompt, /do not (?:produce an architecture tour or )?launch (?:more )?agents|Do not launch agents/i);
 	}
 });
 
-test("fixed workflows require current evidence and stop after one correction pass", async () => {
+test("fixed workflows require current evidence and permit only one conditional critical correction", async () => {
 	const deliver = JSON.parse(await text("chains/workbench/deliver.chain.json")) as {
-		chain: Array<{ task?: string; parallel?: Array<{ task: string }> }>;
+		chain: Array<{ task?: string; expand?: unknown; parallel?: { task: string } | Array<{ task: string }> }>;
 	};
 	const audit = JSON.parse(await text("chains/workbench/audit.chain.json")) as {
 		chain: Array<{ task?: string; parallel?: Array<{ task: string }> }>;
 	};
-	const deliveryTasks = deliver.chain.flatMap((step) => step.parallel?.map((task) => task.task) ?? [step.task ?? ""]);
+	const deliveryTasks = deliver.chain.flatMap((step) => (
+		Array.isArray(step.parallel)
+			? step.parallel.map((task) => task.task)
+			: step.expand && step.parallel
+				? [step.parallel.task]
+				: [step.task ?? ""]
+	));
 	const auditTasks = audit.chain.flatMap((step) => step.parallel?.map((task) => task.task) ?? [step.task ?? ""]);
 
 	assert.match(deliveryTasks[0], /Classify the work as a feature, bug, refactor, or mechanical change/i);
@@ -108,14 +142,26 @@ test("fixed workflows require current evidence and stop after one correction pas
 	assert.match(deliveryTasks[1], /status, Evidence, and Handoff/i);
 	assert.match(deliveryTasks[2], /Spec baseline/i);
 	assert.match(deliveryTasks[2], /acceptance criteria/i);
-	assert.match(deliveryTasks[3], /Spec baseline/i);
-	assert.match(deliveryTasks[3], /acceptance criteria/i);
-	assert.match(deliveryTasks[4], /pre-fix results do not count/i);
-	assert.match(deliveryTasks[4], /Do not begin another autonomous fix loop/i);
-	assert.match(deliveryTasks[4], /status, Evidence, Handoff, and next ready task/i);
-	assert.match(deliveryTasks[5], /first line is READY[\s\S]*otherwise NOT READY/i);
-	assert.match(deliveryTasks[5], /status, Evidence, Handoff, and next ready task match reality/i);
+	assert.match(deliveryTasks[2], /REPORTED/i);
+	assert.match(deliveryTasks[2], /READY requires no findings[\s\S]*NOT_READY requires one or more findings/i);
+	assert.match(deliveryTasks[3], /non-functional quality and security/i);
+	assert.match(deliveryTasks[3], /real trust boundaries/i);
+	assert.match(deliveryTasks[4], /criticalRepairBatches/i);
+	assert.match(deliveryTasks[4], /if and only if at least one surviving (?:top-level )?finding is P0 or P1/i);
+	assert.match(deliveryTasks[4], /sole authoritative finding set/i);
+	assert.match(deliveryTasks[5], /only repair attempt/i);
+	assert.match(deliveryTasks[5], /Refuse and stop safely/i);
+	assert.match(deliveryTasks[5], /every and only top-level P0\/P1 finding/i);
+	assert.match(deliveryTasks[6], /one terminal re-review/i);
+	assert.match(deliveryTasks[6], /overrides the risk-reviewer role's normal narrow functional scope/i);
+	assert.match(deliveryTasks[6], /functional specification and correctness/i);
+	assert.match(deliveryTasks[6], /non-functional reliability/i);
+	assert.match(deliveryTasks[6], /security or privacy/i);
+	assert.match(deliveryTasks[6], /NOT_APPLICABLE only with a concrete reason/i);
+	assert.match(deliveryTasks[6], /Do not edit files, create criticalRepairBatches, launch another worker/i);
+	assert.equal(deliveryTasks.length, 7);
 	assert.match(auditTasks[0], /Spec baseline/i);
+	assert.match(auditTasks[1], /non-functional and security risk/i);
 	assert.match(auditTasks[1], /acceptance coverage/i);
 	assert.match(auditTasks[2], /named review gate/i);
 	assert.match(auditTasks[2], /work-plan disposition/i);

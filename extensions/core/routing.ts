@@ -40,7 +40,7 @@ export const ACTION_LIMITS: Readonly<Record<LaunchAction, ActionLimits>> = {
 	plan: { timeoutMs: 15 * 60_000, turnBudget: { maxTurns: 18, graceTurns: 2 } },
 	implement: { timeoutMs: 45 * 60_000 },
 	review: { timeoutMs: 15 * 60_000, turnBudget: { maxTurns: 18, graceTurns: 2 } },
-	deliver: { timeoutMs: 45 * 60_000 },
+	deliver: { timeoutMs: 60 * 60_000 },
 	audit: { timeoutMs: 20 * 60_000 },
 };
 

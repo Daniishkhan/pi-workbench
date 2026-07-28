@@ -46,4 +46,17 @@ const sharedTypesSource = readFileSync(path.join(runtimeRoot, "src", "shared", "
 if (!sharedTypesSource.includes('SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete"')) {
 	throw new Error("pi-subagents async-complete event contract check failed.");
 }
+const settingsSource = readFileSync(path.join(runtimeRoot, "src", "shared", "settings.ts"), "utf8");
+for (const contract of [
+	"export interface DynamicExpandSpec",
+	"maxItems?: number",
+	'onEmpty?: "skip" | "fail"',
+	"export interface DynamicParallelStep",
+]) {
+	if (!settingsSource.includes(contract)) throw new Error(`pi-subagents bounded dynamic-fanout compatibility check failed: ${contract}`);
+}
+const dynamicFanoutSource = readFileSync(path.join(runtimeRoot, "src", "runs", "shared", "dynamic-fanout.ts"), "utf8");
+if (!dynamicFanoutSource.includes('if ((step.expand.onEmpty ?? "skip") === "fail")')) {
+	throw new Error("pi-subagents empty dynamic fanout no longer defaults to a safe skip.");
+}
 console.log(`Verified pi-subagents upstream main snapshot ${expectedCommit.slice(0, 12)} (${runtimePackage.version}, ${locked.integrity.slice(0, 24)}…).`);

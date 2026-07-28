@@ -71,11 +71,20 @@ const expectedAgents = {
 	"pi-workbench.planner": "read-only",
 	"pi-workbench.worker": "writer",
 	"pi-workbench.reviewer": "read-only",
+	"pi-workbench.risk-reviewer": "read-only",
+};
+const expectedAgentSurfaces = {
+	"pi-workbench.fast-scout": ["one-off"],
+	"pi-workbench.planner": ["one-off", "workflow"],
+	"pi-workbench.worker": ["one-off", "workflow"],
+	"pi-workbench.reviewer": ["one-off", "workflow"],
+	"pi-workbench.risk-reviewer": ["workflow"],
 };
 const expectedAgentFiles = [
 	"agents/core/fast-scout.md",
 	"agents/core/planner.md",
 	"agents/core/reviewer.md",
+	"agents/core/risk-reviewer.md",
 	"agents/core/worker.md",
 ];
 const expectedChainFiles = [
@@ -145,7 +154,7 @@ for (const invalid of [
 	}
 }
 
-// Exactly four leaf agents.
+// Exactly five leaf agents.
 const agentFiles = walk(path.join(root, "agents"), (file) => file.endsWith(".md"));
 assertExactSet(agentFiles.map(relative), expectedAgentFiles, "agents");
 const agentNames = new Set();
@@ -182,7 +191,7 @@ assertExactSet(agentNames, Object.keys(expectedAgents), "agent runtime names");
 assertExactSet(Object.keys(ROLE_POLICIES), Object.keys(expectedAgents), "role policy");
 for (const [agent, capability] of Object.entries(expectedAgents)) {
 	if (ROLE_POLICIES[agent]?.capability !== capability) fail(`role-policy: ${agent} must be ${capability}`);
-	if (!ROLE_POLICIES[agent]?.surfaces?.length) fail(`role-policy: ${agent} has no allowed surface`);
+	assertExactSet(ROLE_POLICIES[agent]?.surfaces ?? [], expectedAgentSurfaces[agent], `role-policy: ${agent} surfaces`);
 }
 if (JSON.stringify(ENGINEERING_ACTIONS) !== JSON.stringify(expectedActions)) fail("routing: public action list changed");
 const expectedOneOffAgents = {
@@ -197,7 +206,7 @@ const expectedLimits = {
 	plan: { timeoutMs: 15 * 60_000, turnBudget: { maxTurns: 18, graceTurns: 2 } },
 	implement: { timeoutMs: 45 * 60_000 },
 	review: { timeoutMs: 15 * 60_000, turnBudget: { maxTurns: 18, graceTurns: 2 } },
-	deliver: { timeoutMs: 45 * 60_000 },
+	deliver: { timeoutMs: 60 * 60_000 },
 	audit: { timeoutMs: 20 * 60_000 },
 };
 if (JSON.stringify(ACTION_LIMITS) !== JSON.stringify(expectedLimits)) fail("routing: bounded action limits changed");
@@ -236,14 +245,52 @@ if (skillFiles.length === 1) {
 	if (fm.name !== "pi-engineering" || !fm.description) fail("skills/pi-engineering/SKILL.md: invalid frontmatter");
 }
 
-// Profile must cover exactly the four packaged roles.
+// Profile must cover exactly the five packaged roles.
 const profile = readJson(path.join(root, "profiles", "recommended-agent-overrides.json"));
 if (profile?.schemaVersion !== 1 || !profile?.agentOverrides) fail("profiles/recommended-agent-overrides.json: invalid profile");
 assertExactSet(Object.keys(profile?.agentOverrides ?? {}), Object.keys(expectedAgents), "profile agents");
+for (const [agent, override] of Object.entries(profile?.agentOverrides ?? {})) {
+	for (const fallback of Array.isArray((override as { fallbackModels?: unknown }).fallbackModels)
+		? (override as { fallbackModels: unknown[] }).fallbackModels
+		: []) {
+		if (typeof fallback !== "string" || !/:(?:off|minimal|low|medium|high|xhigh|max)$/.test(fallback)) {
+			fail(`profiles/recommended-agent-overrides.json: ${agent} fallback models must declare an explicit thinking level`);
+		}
+	}
+}
 
-// Two small static chains. The same closed contract runs again at launch time.
+const independentModelRoles = [
+	"pi-workbench.worker",
+	"pi-workbench.reviewer",
+	"pi-workbench.risk-reviewer",
+];
+const thinkingSuffix = /:(?:off|minimal|low|medium|high|xhigh|max)$/;
+const modelPools = new Map();
+for (const agent of independentModelRoles) {
+	const override = profile?.agentOverrides?.[agent];
+	const configuredModels = [override?.model, ...(Array.isArray(override?.fallbackModels) ? override.fallbackModels : [])];
+	if (configuredModels.some((model) => typeof model !== "string" || !model.trim())) {
+		fail(`profiles/recommended-agent-overrides.json: ${agent} must define a primary model and valid fallbacks`);
+		continue;
+	}
+	modelPools.set(agent, new Set(configuredModels.map((model) => model.replace(thinkingSuffix, ""))));
+}
+for (let left = 0; left < independentModelRoles.length; left += 1) {
+	for (let right = left + 1; right < independentModelRoles.length; right += 1) {
+		const leftAgent = independentModelRoles[left];
+		const rightAgent = independentModelRoles[right];
+		const overlap = [...(modelPools.get(leftAgent) ?? [])].filter((model) => modelPools.get(rightAgent)?.has(model));
+		if (overlap.length > 0) {
+			fail(`profiles/recommended-agent-overrides.json: ${leftAgent} and ${rightAgent} share base model ${overlap.join(", ")}`);
+		}
+	}
+}
+
+// Two closed package chains. The same bounded contract runs again at launch time.
 const chainFiles = walk(path.join(root, "chains"), (file) => file.endsWith(".chain.json"));
 assertExactSet(chainFiles.map(relative), expectedChainFiles, "chains");
+const reviewSchemaFingerprints: string[] = [];
+const decisionSchemaFingerprints: string[] = [];
 for (const file of chainFiles) {
 	const chain = readJson(file);
 	const label = relative(file);
@@ -253,6 +300,25 @@ for (const file of chainFiles) {
 		continue;
 	}
 	for (const error of workflowDefinitionErrors(expectedName, chain, label)) fail(error);
+	for (const step of Array.isArray(chain?.chain) ? chain.chain : []) {
+		const tasks = Array.isArray(step?.parallel)
+			? step.parallel
+			: step?.expand && step?.parallel && typeof step.parallel === "object"
+				? [step.parallel]
+				: [step];
+		for (const task of tasks) {
+			if (!task?.outputSchema) continue;
+			const fingerprint = JSON.stringify(task.outputSchema);
+			if (task.outputSchema?.properties?.criticalRepairBatches) decisionSchemaFingerprints.push(fingerprint);
+			else reviewSchemaFingerprints.push(fingerprint);
+		}
+	}
+}
+if (reviewSchemaFingerprints.length !== 5 || new Set(reviewSchemaFingerprints).size !== 1) {
+	fail("chains: the five independent structured reviewer receipts must share one identical schema contract");
+}
+if (decisionSchemaFingerprints.length !== 1) {
+	fail("chains: deliver must contain exactly one structured critical-repair synthesis decision");
 }
 
 // Composition and command/tool surface.
@@ -261,8 +327,10 @@ const composition = [
 	"registerSubagents(pi)",
 	"registerRawSubagentBoundary(pi)",
 	"registerInspectRepoTool(pi)",
-	"if (isChildSession()) return",
+	"if (isChildSession()) {",
+	"registerStructuredOutputRecovery(pi)",
 	"loadEngineeringConfig()",
+	"new PlannotatorPresenter(",
 	"new WriterCoordinator(",
 	"new SubagentRpcClient(",
 	"createWorkflowService({",
@@ -279,6 +347,7 @@ if ((entrySource.match(/new SubagentRpcClient\(/g) ?? []).length !== 1) fail("ex
 if (!entrySource.includes('pi.events.on("subagent:async-complete"') || !entrySource.includes("writerCoordinator.releaseRun(runId)")) {
 	fail("extensions/index.ts: async completion must release write locks");
 }
+if (!entrySource.includes("reportPresenter.present(payload)")) fail("extensions/index.ts: terminal workflows must present their final report");
 if (!entrySource.includes("reconcileWriterLeases(writerCoordinator, rpc)")) fail("extensions/index.ts: session startup must reconcile write locks");
 for (const forbidden of ["resources_discover", "SUBAGENTS_SKILL", "registerTeams", "registerDynamic", "registerShipyard"]) {
 	if (entrySource.includes(forbidden)) fail(`extensions/index.ts: obsolete or alternate policy surface ${forbidden}`);
